@@ -1,0 +1,443 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/printer"
+	"go/token"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+var osStat = os.Stat
+
+type GeneratorOptions struct {
+	InputFile     string
+	InterfaceName string
+	Alias         string
+	OutputPath    string
+}
+
+type MethodInfo struct {
+	Name             string
+	SignatureParams  string
+	SignatureResults string
+	CallArguments    string
+	FuncFieldType    string
+	SetReturnParams  string
+	ReturnArguments  string
+}
+
+func GenerateMockFile(opts GeneratorOptions) (string, error) {
+	if opts.InputFile == "" {
+		return "", fmt.Errorf("input file is required")
+	}
+	if opts.InterfaceName == "" {
+		return "", fmt.Errorf("interface name is required")
+	}
+	if opts.Alias == "" {
+		opts.Alias = opts.InterfaceName
+	}
+
+	src, err := os.ReadFile(opts.InputFile)
+	if err != nil {
+		return "", err
+	}
+
+	srcFile, imports, err := parseSourceFile(opts.InputFile, src)
+	if err != nil {
+		return "", err
+	}
+
+	iface, err := findInterface(srcFile, opts.InterfaceName)
+	if err != nil {
+		return "", err
+	}
+
+	methods, usedImports, err := buildMethods(iface, imports)
+	if err != nil {
+		return "", err
+	}
+
+	code, err := renderMock(opts.Alias, methods, usedImports)
+	if err != nil {
+		return "", err
+	}
+
+	outputPath, err := resolveOutputPath(opts.OutputPath, opts.Alias)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(outputPath, code, 0o644); err != nil {
+		return "", err
+	}
+
+	return outputPath, nil
+}
+
+func parseSourceFile(filename string, src []byte) (*ast.File, map[string]string, error) {
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	imports := map[string]string{}
+	for _, spec := range parsed.Imports {
+		importPath, err := strconvUnquote(spec.Path.Value)
+		if err != nil {
+			return nil, nil, err
+		}
+		alias := ""
+		if spec.Name != nil {
+			alias = spec.Name.Name
+		}
+		if alias == "" {
+			alias = path.Base(importPath)
+		}
+		imports[alias] = importPath
+	}
+
+	return parsed, imports, nil
+}
+
+func strconvUnquote(value string) (string, error) {
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		return value[1 : len(value)-1], nil
+	}
+	return "", fmt.Errorf("invalid import path %s", value)
+}
+
+func findInterface(file *ast.File, name string) (*ast.InterfaceType, error) {
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec := spec.(*ast.TypeSpec)
+			if typeSpec.Name.Name != name {
+				continue
+			}
+			iface, ok := typeSpec.Type.(*ast.InterfaceType)
+			if !ok {
+				return nil, fmt.Errorf("type %s is not an interface", name)
+			}
+			return iface, nil
+		}
+	}
+	return nil, fmt.Errorf("interface %s not found", name)
+}
+
+func buildMethods(iface *ast.InterfaceType, imports map[string]string) ([]MethodInfo, map[string]string, error) {
+	methods := []MethodInfo{}
+	usedImports := map[string]string{}
+
+	for _, field := range iface.Methods.List {
+		if len(field.Names) == 0 {
+			return nil, nil, fmt.Errorf("embedded interfaces are not supported")
+		}
+		methodName := field.Names[0].Name
+		funcType, ok := field.Type.(*ast.FuncType)
+		if !ok {
+			return nil, nil, fmt.Errorf("unsupported interface member %s", methodName)
+		}
+
+		if err := collectImports(funcType, imports, usedImports); err != nil {
+			return nil, nil, err
+		}
+
+		params, argNames := formatParams(funcType.Params)
+		results, resultTypes := formatResults(funcType.Results)
+		setReturnParams, returnArgs := deriveSetReturn(resultTypes)
+
+		funcTypeString := renderFuncType(funcType)
+		methods = append(methods, MethodInfo{
+			Name:             methodName,
+			SignatureParams:  params,
+			SignatureResults: results,
+			CallArguments:    strings.Join(argNames, ", "),
+			FuncFieldType:    funcTypeString,
+			SetReturnParams:  setReturnParams,
+			ReturnArguments:  returnArgs,
+		})
+	}
+
+	return methods, usedImports, nil
+}
+
+func collectImports(expr ast.Node, imports map[string]string, used map[string]string) error {
+	var foundErr error
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if foundErr != nil {
+			return false
+		}
+		switch t := node.(type) {
+		case *ast.SelectorExpr:
+			if pkgIdent, ok := t.X.(*ast.Ident); ok {
+				if importPath, found := imports[pkgIdent.Name]; found {
+					used[pkgIdent.Name] = importPath
+				} else {
+					foundErr = fmt.Errorf("unknown selector package %s", pkgIdent.Name)
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return foundErr
+}
+
+func formatParams(list *ast.FieldList) (string, []string) {
+	if list == nil {
+		return "", nil
+	}
+
+	parts := []string{}
+	args := []string{}
+	index := 0
+	for _, field := range list.List {
+		typeStr := nodeString(field.Type)
+		if len(field.Names) == 0 {
+			parts = append(parts, typeStr)
+			argName := fmt.Sprintf("arg%d", index)
+			args = append(args, argName)
+			index++
+			continue
+		}
+		names := []string{}
+		for _, name := range field.Names {
+			names = append(names, name.Name)
+			args = append(args, name.Name)
+			index++
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", strings.Join(names, ", "), typeStr))
+	}
+	return strings.Join(parts, ", "), args
+}
+
+func formatResults(list *ast.FieldList) (string, []string) {
+	if list == nil {
+		return "", nil
+	}
+
+	parts := []string{}
+	resultTypes := []string{}
+	for _, field := range list.List {
+		typeStr := nodeString(field.Type)
+		resultTypes = append(resultTypes, typeStr)
+		if len(list.List) == 1 {
+			parts = append(parts, typeStr)
+			break
+		}
+		parts = append(parts, typeStr)
+	}
+
+	if len(parts) == 1 {
+		return parts[0], resultTypes
+	}
+	return fmt.Sprintf("(%s)", strings.Join(parts, ", ")), resultTypes
+}
+
+func deriveSetReturn(resultTypes []string) (string, string) {
+	if len(resultTypes) == 0 {
+		return "", ""
+	}
+
+	parts := []string{}
+	vars := []string{}
+	for index, typ := range resultTypes {
+		name := fmt.Sprintf("result%d", index)
+		if len(resultTypes) == 1 {
+			if typ == "error" {
+				name = "err"
+			} else {
+				name = "result"
+			}
+		} else if index == len(resultTypes)-1 && typ == "error" {
+			name = "err"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", name, typ))
+		vars = append(vars, name)
+	}
+
+	return strings.Join(parts, ", "), strings.Join(vars, ", ")
+}
+
+func renderFuncType(funcType *ast.FuncType) string {
+	params, _ := formatParams(funcType.Params)
+	results, _ := formatResults(funcType.Results)
+	if results == "" {
+		return fmt.Sprintf("func(%s)", params)
+	}
+	return fmt.Sprintf("func(%s) %s", params, results)
+}
+
+func nodeString(node ast.Node) string {
+	var buf bytes.Buffer
+	_ = printer.Fprint(&buf, token.NewFileSet(), node)
+	return buf.String()
+}
+
+func renderMock(alias string, methods []MethodInfo, usedImports map[string]string) ([]byte, error) {
+	imports := map[string]string{}
+	imports["fmt"] = "fmt"
+	imports["runtime"] = "runtime"
+	for aliasName, importPath := range usedImports {
+		imports[aliasName] = importPath
+	}
+
+	importLines := []string{}
+	for aliasName, importPath := range imports {
+		if aliasName == path.Base(importPath) {
+			importLines = append(importLines, fmt.Sprintf("\t\"%s\"", importPath))
+		} else {
+			importLines = append(importLines, fmt.Sprintf("\t%s \"%s\"", aliasName, importPath))
+		}
+	}
+	sort.Strings(importLines)
+
+	var buf strings.Builder
+	buf.WriteString("// Code generated by xmocks; DO NOT EDIT.\n")
+	buf.WriteString("package pkgxmock\n\n")
+	buf.WriteString("import (\n")
+	for _, line := range importLines {
+		buf.WriteString(line)
+		buf.WriteString("\n")
+	}
+	buf.WriteString(")\n\n")
+
+	buf.WriteString(fmt.Sprintf("type TestCase%s struct {\n", alias))
+	buf.WriteString("\tName string\n")
+	buf.WriteString("\tEnv map[string]string\n")
+	buf.WriteString("\tInput any\n")
+	buf.WriteString("\tWant any\n")
+	buf.WriteString("\tWantErr bool\n")
+	buf.WriteString("\tErrContains string\n")
+	buf.WriteString(fmt.Sprintf("\tMockFn func(m *Mock%s)\n", alias))
+	buf.WriteString("}\n\n")
+
+	buf.WriteString(fmt.Sprintf("func NewMock%s() *Mock%s {\n", alias, alias))
+	buf.WriteString(fmt.Sprintf("\tmock := &Mock%s{}\n", alias))
+	buf.WriteString(fmt.Sprintf("\tmock.OnCall = &mockOnCall%s{mock: mock}\n", alias))
+	buf.WriteString(fmt.Sprintf("\tmock.SetReturn = &mockSetReturn%s{mock: mock}\n", alias))
+	buf.WriteString("\treturn mock\n")
+	buf.WriteString("}\n\n")
+
+	buf.WriteString(fmt.Sprintf("type Mock%s struct {\n", alias))
+	for _, method := range methods {
+		buf.WriteString(fmt.Sprintf("\t%sFunc %s\n", method.Name, method.FuncFieldType))
+	}
+	buf.WriteString(fmt.Sprintf("\tOnCall *mockOnCall%s\n", alias))
+	buf.WriteString(fmt.Sprintf("\tSetReturn *mockSetReturn%s\n", alias))
+	buf.WriteString("}\n\n")
+
+	buf.WriteString(fmt.Sprintf("func (m *Mock%s) panicIfNotConfigured() {\n", alias))
+	buf.WriteString("\tpc, _, _, ok := runtime.Caller(2)\n")
+	buf.WriteString("\tmethodName := \"UnknownMethod\"\n")
+	buf.WriteString("\tif ok {\n")
+	buf.WriteString("\t\tfullFnName := runtime.FuncForPC(pc).Name()\n")
+	buf.WriteString("\t\tshortName := fullFnName\n")
+	buf.WriteString("\t\tfor i := len(fullFnName) - 1; i >= 0; i-- {\n")
+	buf.WriteString("\t\t\tif fullFnName[i] == '/' {\n")
+	buf.WriteString("\t\t\t\tshortName = fullFnName[i+1:]\n")
+	buf.WriteString("\t\t\t\tbreak\n")
+	buf.WriteString("\t\t\t}\n")
+	buf.WriteString("\t\t}\n")
+	buf.WriteString("\t\tmethodName = shortName\n")
+	buf.WriteString("\t}\n")
+	buf.WriteString("\tpanic(fmt.Sprintf(\"CRITICAL: Mock for %s not configured.\", methodName))\n")
+	buf.WriteString("}\n\n")
+
+	for _, method := range methods {
+		buf.WriteString(fmt.Sprintf("func (m *Mock%s) %s(%s) %s {\n", alias, method.Name, method.SignatureParams, method.SignatureResults))
+		buf.WriteString(fmt.Sprintf("\tif m.%sFunc == nil {\n", method.Name))
+		buf.WriteString("\t\tm.panicIfNotConfigured()\n")
+		buf.WriteString("\t}\n")
+		if method.SignatureResults == "" {
+			buf.WriteString(fmt.Sprintf("\t m.%sFunc(%s)\n", method.Name, method.CallArguments))
+		} else {
+			buf.WriteString(fmt.Sprintf("\treturn m.%sFunc(%s)\n", method.Name, method.CallArguments))
+		}
+		buf.WriteString("}\n\n")
+	}
+
+	buf.WriteString(fmt.Sprintf("type mockOnCall%s struct {\n", alias))
+	buf.WriteString(fmt.Sprintf("\tmock *Mock%s\n", alias))
+	buf.WriteString("}\n\n")
+
+	for _, method := range methods {
+		buf.WriteString(fmt.Sprintf("func (o *mockOnCall%s) %s(fn %s) {\n", alias, method.Name, method.FuncFieldType))
+		buf.WriteString(fmt.Sprintf("\to.mock.%sFunc = fn\n", method.Name))
+		buf.WriteString("}\n\n")
+	}
+
+	buf.WriteString(fmt.Sprintf("type mockSetReturn%s struct {\n", alias))
+	buf.WriteString(fmt.Sprintf("\tmock *Mock%s\n", alias))
+	buf.WriteString("}\n\n")
+
+	for _, method := range methods {
+		buf.WriteString(fmt.Sprintf("func (r *mockSetReturn%s) %s(%s) {\n", alias, method.Name, method.SetReturnParams))
+		buf.WriteString(fmt.Sprintf("\tr.mock.OnCall.%s(func(%s) %s {\n", method.Name, method.SignatureParams, method.SignatureResults))
+		if method.ReturnArguments != "" {
+			buf.WriteString(fmt.Sprintf("\t\treturn %s\n", method.ReturnArguments))
+		}
+		buf.WriteString("\t})\n")
+		buf.WriteString("}\n\n")
+	}
+
+	formatted, err := format.Source([]byte(buf.String()))
+	if err != nil {
+		return nil, err
+	}
+	return formatted, nil
+}
+
+func resolveOutputPath(output string, alias string) (string, error) {
+	if output == "" {
+		return filepath.Join("internal", "pkgxmock", strings.ToLower(alias)+".go"), nil
+	}
+
+	exists, err := pathExists(output)
+	if err != nil {
+		return "", err
+	}
+
+	if exists {
+		info, err := osStat(output)
+		if err != nil {
+			return "", err
+		}
+		if info.IsDir() {
+			return filepath.Join(output, strings.ToLower(alias)+".go"), nil
+		}
+	}
+
+	if strings.HasSuffix(output, ".go") {
+		return output, nil
+	}
+
+	return filepath.Join(output, strings.ToLower(alias)+".go"), nil
+}
+
+func pathExists(filePath string) (bool, error) {
+	_, err := osStat(filePath)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
