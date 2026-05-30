@@ -1,0 +1,68 @@
+name: Go Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: false
+
+      - name: Run Tests in All Modules
+        # Forçamos o uso do PowerShell Core (disponível por padrão no Ubuntu, Mac e Windows do GitHub)
+        shell: pwsh
+        run: |
+          # Script único e universal em PowerShell para todas as plataformas da matriz
+          Get-ChildItem -Recurse -Filter "go.mod" | ForEach-Object {
+            $dir = $_.DirectoryName
+            Write-Host "========================================="
+            Write-Host "Running tests in module: $dir"
+            Write-Host "========================================="
+            Set-Location $dir
+            go test -v -cover ./...
+            Set-Location $env:GITHUB_WORKSPACE
+          }
+
+  cross_compile_check:
+    name: Cross-Compile Check (Other Unixes)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: false
+
+      - name: Verify Compilation for FreeBSD, OpenBSD and Solaris
+        run: |
+          for dir in $(find . -name "go.mod" -exec dirname {} \;); do
+            cd "$dir"
+            for platform in freebsd openbsd netbsd solaris dragonfly; do
+              echo "Checking compilation for GOOS=$platform in $dir..."
+              GOOS=$platform go test -c ./...
+            done
+            cd - > /dev/null
+          done
