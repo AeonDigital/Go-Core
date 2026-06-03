@@ -26,6 +26,7 @@ var (
 	fnMockable_IsDir         = xfs.IsDir
 	fnMockable_CreateDirPath = xfs.CreateDirPath
 	fnMockable_OpenFileWrite = xfs.OpenFileWrite
+	fnMockable_GetUserLogDir = xfs.GetUserLogDir
 )
 
 // LogHandler intercepts standard slog records to apply custom multi-destination
@@ -153,7 +154,10 @@ func (o *LogHandler) checkRegistryConfiguration(appName string, logFileName stri
 
 	// 3. Define target working base directories if unassigned
 	if o.LogRegistryDirPath == "" {
-		o.LogRegistryDirPath = xfs.GetUserLogDir(appName)
+		o.LogRegistryDirPath, err = fnMockable_GetUserLogDir(appName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 4. Ensure directory tree topologies exist safely on disk

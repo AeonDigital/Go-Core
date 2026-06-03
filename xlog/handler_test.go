@@ -371,6 +371,21 @@ func TestLogHandler_CheckRegistryConfiguration_Table(t *testing.T) {
 			},
 		},
 		{
+			name: "Should fail when user log directory resolution returns an error",
+			inputHandler: &xlog.LogHandler{
+				LogRegistry:        true,
+				LogRegistryLevel:   xlog.LevelInfo,
+				LogRegistryDirPath: "",
+			},
+			setupMock: func(t *testing.T) {
+				xlog.MockFunction(t, xlog.FnMockable_GetUserLogDir, func(appName string) (string, error) {
+					return "", errors.New("user log dir failure")
+				})
+			},
+			wantErr:     true,
+			errContains: "user log dir failure",
+		},
+		{
 			name: "Should fail and propagate wrapped error when directory path creation routines fail",
 			inputHandler: &xlog.LogHandler{
 				LogRegistry:        true,

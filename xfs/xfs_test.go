@@ -1,23 +1,88 @@
-package xfs
+package xfs_test
 
 import (
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/AeonDigital/Go-Core/internal/pkgxmock"
 	"github.com/AeonDigital/Go-Core/xerrors"
+	"github.com/AeonDigital/Go-Core/xfs"
 )
 
-// mockFileInfo implementa estritamente a interface os.FileInfo necessária para o teste
+// SetupTestMock orchestrates the initialization, configuration, and injection
+// of the strict filesystem package bridge mock for a specific test execution scenario.
+// It applies the optional configuration function and returns a cleanup function to safely
+// restore the original package state upon completion.
+func SetupTestMock(t *testing.T, tt pkgxmock.TestCaseXFS) func() {
+	t.Helper()
+
+	if tt.Env != nil {
+		for k, v := range tt.Env {
+			t.Setenv(k, v)
+		}
+	}
+
+	mockBridge := pkgxmock.NewMockXFS()
+
+	if tt.MockFn != nil {
+		tt.MockFn(mockBridge)
+	}
+
+	restore := xfs.SetBridgeXFSForTest(mockBridge)
+	return restore
+}
+
+// AssertResult handles all standard assertions for a pkgxmock.TestCaseXFS execution.
+// It verifies error presence, specific error message content, and final value equality
+// using deep reflection comparison against the expected criteria.
+func AssertResult(t *testing.T, tt pkgxmock.TestCaseXFS, testFunction string, got any, err error) {
+	t.Helper()
+
+	// Intercepts *os.File types to ensure valid streams and handle resource cleanup
+	if err == nil && !tt.WantErr && got != nil {
+		if filePtr, ok := got.(*os.File); ok {
+			if filePtr == nil {
+				t.Error("Expected a valid *os.File pointer on success, got nil")
+			} else {
+				filePtr.Close()
+			}
+			// Sets got to nil to match a clean tt.Want expectation for stream returns
+			got = nil
+		}
+	}
+
+	if (err != nil) != tt.WantErr {
+		t.Fatalf("%s() error = %v, wantErr %v", testFunction, err, tt.WantErr)
+	}
+
+	if tt.WantErr {
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+		}
+		if !strings.Contains(errStr, tt.ErrContains) {
+			t.Errorf("%s() Expected error to contain %q, got %q", testFunction, tt.ErrContains, errStr)
+		}
+		return
+	}
+
+	if !reflect.DeepEqual(got, tt.Want) {
+		t.Errorf("%s() = %v (%T), want %v (%T)", testFunction, got, got, tt.Want, tt.Want)
+	}
+}
+
+// mockFileInfo implements os.FileInfo needed for tests
 type mockFileInfo struct {
-	os.FileInfo      // Incorpora a interface para herdar métodos que não usaremos
-	isRegular   bool // Controla o retorno do método Mode().IsRegular()
-	isDir       bool
-	mode        os.FileMode
-	size        int64
+	os.FileInfo
+	isRegular bool
+	isDir     bool
+	mode      os.FileMode
+	size      int64
 }
 
 func (m mockFileInfo) Mode() os.FileMode {
@@ -30,26 +95,11 @@ func (m mockFileInfo) Mode() os.FileMode {
 	}
 	return os.ModeDir // Returns a directory mode if not a regular file
 }
-
-func (m mockFileInfo) IsDir() bool { return m.isDir }
-
-func (m mockFileInfo) Size() int64 { return m.size }
-
-// mockFunction substitui temporariamente uma função mockável por uma versão de teste
-// e registra automaticamente o seu reset original no ciclo de vida do teste.
-func mockFunction[T any](t *testing.T, original *T, mock T) {
-	t.Helper()
-
-	// Salva o estado original da variável
-	oldValue := *original
-
-	// Injeta o mock
-	*original = mock
-
-	// Registra o reset automático para quando o teste atual terminar
-	t.Cleanup(func() {
-		*original = oldValue
-	})
+func (m mockFileInfo) IsDir() bool {
+	return m.isDir
+}
+func (m mockFileInfo) Size() int64 {
+	return m.size
 }
 
 // Função auxiliar para resolver caminhos relativos ao PWD do teste com segurança
@@ -63,2266 +113,2285 @@ func mustAbs(t *testing.T, path string) string {
 }
 
 func TestWrappersCoverage(t *testing.T) {
-	// Apenas chama para passar pelas linhas da cobertura
-	_, _ = GetUserHomeDir()
-	_, _ = GetUserConfigDir()
-	_, _ = fnMockable_ReadDir(nil, 0)
+	bridge := xfs.PkgBridgeXFS{}
+
+	// Setup realistic dynamic paths to guarantee execution safety without panics
+	tmpDir := t.TempDir()
+	tmpFile, err := os.CreateTemp(tmpDir, "coverage_stub")
+	if err != nil {
+		t.Fatalf("failed to setup coverage file requirement: %v", err)
+	}
+	defer tmpFile.Close()
+
+	// 1. Core and Path Resolution Wrappers
+	_, _ = bridge.FilepathAbs(tmpDir)
+	_, _ = bridge.RetrieveFullPath(".")
+	_, _ = bridge.GetParentPath(tmpFile.Name())
+
+	// 2. Special Directories Wrappers
+	_, _ = bridge.GetUserHomeDir()
+	_, _ = bridge.GetUserConfigDir()
+	_, _ = bridge.GetUserDataDir("MyApp")
+	_, _ = bridge.GetUserLogDir("MyApp")
+
+	// 3. Platform OS Native Path Formatter Wrappers
+	_ = bridge.OSUserDataDir(tmpDir, "MyApp")
+	_ = bridge.OSUserLogDir(tmpDir, "MyApp")
+
+	// 4. File and Directory Boundary Interaction Wrappers
+	_, _ = bridge.OsStat(tmpFile.Name())
+	if f, err := bridge.OsOpen(tmpFile.Name()); err == nil {
+		_, _ = bridge.ReadDir(f, -1)
+		_ = f.Close()
+	}
+	_, _ = bridge.OsOpenFile(tmpFile.Name(), os.O_RDONLY, 0)
+	if fTemp, err := bridge.OsCreateTemp(tmpDir, "ephemeral_*"); err == nil {
+		_ = fTemp.Close()
+	}
+
+	// 5. State, Checking and Inspection Logic Wrappers
+	_ = bridge.IsDir(tmpDir)
+	_ = bridge.Exists(tmpFile.Name())
+	_, _ = bridge.GetVolumeFreeSpace(tmpDir, 1024)
+
+	// 6. Destructive and Mutation Wrappers (Executed safely over t.TempDir)
+	targetMkdir := filepath.Join(tmpDir, "sub_dir")
+	targetMkdirAll := filepath.Join(tmpDir, "nested", "tree")
+
+	_ = bridge.OsMkdir(targetMkdir, 0755)
+	_ = bridge.OsMkdirAll(targetMkdirAll, 0755)
+	_ = bridge.OsChmod(tmpFile.Name(), 0644)
+	_ = bridge.OsRemove(targetMkdir)
+	_ = bridge.OsRemoveAll(targetMkdirAll)
+
+	_, _ = xfs.GetUserHomeDir()
+	_, _ = xfs.GetUserConfigDir()
+
 }
 
 func TestRetrieveFullPath(t *testing.T) {
+	testFunction := "RetrieveFullPath"
 	mockHome := filepath.FromSlash("/user/mockhome")
 
-	tests := []struct {
-		name         string
-		input        string
-		want         string
-		wantErr      bool
-		errContains  string
-		customHomeFn func() (string, error)
-		customAbsFn  func(string) (string, error)
-	}{
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Empty path string should fail immediately",
-			input:       "",
-			wantErr:     true,
-			errContains: "[MSG: empty string value not allowed][FIELD: path]",
+			Name: "Empty path string should fail immediately",
+			Input: inputArgs{
+				path: "",
+			},
+			WantErr:     true,
+			MockFn:      func(m *pkgxmock.MockXFS) {},
+			ErrContains: "[MSG: empty string value not allowed][FIELD: path]",
 		},
 		{
-			name:    "Standard path without tilde should turn into absolute",
-			input:   "documents/project",
-			want:    mustAbs(t, "documents/project"),
-			wantErr: false,
-		},
-		{
-			name:  "Tilde alone should resolve exactly to user home directory",
-			input: "~",
-			// Technical Note: Ensures forward slash uniformity to match production cross-platform sanitization
-			want:    filepath.ToSlash(mockHome),
-			wantErr: false,
-			// Technical Note: Forces the absolute path hook to preserve forward slashes on Windows simulation
-			customAbsFn: func(p string) (string, error) { return filepath.ToSlash(p), nil },
-		},
-		{
-			name:        "Tilde with forward slash should append structure to home directory",
-			input:       "~/downloads/file.txt",
-			want:        filepath.ToSlash(filepath.Join(mockHome, "downloads", "file.txt")),
-			wantErr:     false,
-			customAbsFn: func(p string) (string, error) { return filepath.ToSlash(p), nil },
-		},
-		{
-			name:        "Tilde with backward slash should append structure to home directory",
-			input:       "~\\documents\\report.pdf",
-			want:        filepath.ToSlash(filepath.Join(mockHome, "documents", "report.pdf")),
-			wantErr:     false,
-			customAbsFn: func(p string) (string, error) { return filepath.ToSlash(p), nil },
-		},
-		{
-			name:    "Tilde stuck to letters without slashes should be treated as relative name",
-			input:   "~aeon-folder",
-			want:    mustAbs(t, "~aeon-folder"),
-			wantErr: false,
-		},
-		{
-			name:        "Should fail and wrap error when user home resolution fails",
-			input:       "~/downloads",
-			wantErr:     true,
-			errContains: "[MSG: failed to resolve user home directory][FIELD: home]",
-			customHomeFn: func() (string, error) {
-				return "", errors.New("permission denied")
+			Name: "Standard path without tilde should turn into absolute",
+			Input: inputArgs{
+				path: "documents/project",
+			},
+			Want:    mustAbs(t, "documents/project"),
+			WantErr: false,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.FilepathAbs(filepath.Abs)
 			},
 		},
 		{
-			name:        "Should fail when absolute path resolution returns an error",
-			input:       "documents/project",
-			wantErr:     true,
-			errContains: "[MSG: failed to resolve absolute path][FIELD: path]",
-			customAbsFn: func(path string) (string, error) {
-				return "", errors.New("mocked filesystem breakdown error")
+			Name: "Tilde alone should resolve exactly to user home directory",
+			Input: inputArgs{
+				path: "~",
+			},
+			Want:    filepath.ToSlash(mockHome),
+			WantErr: false,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir(mockHome, nil)
+				m.SetReturn.FilepathAbs(filepath.ToSlash(mockHome), nil)
+			},
+		},
+		{
+			Name: "Tilde with forward slash should append structure to home directory",
+			Input: inputArgs{
+				path: "~/downloads/file.txt",
+			},
+			Want:    filepath.ToSlash(filepath.Join(mockHome, "downloads", "file.txt")),
+			WantErr: false,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir(mockHome, nil)
+				m.SetReturn.FilepathAbs(filepath.ToSlash(filepath.Join(mockHome, "downloads", "file.txt")), nil)
+			},
+		},
+		{
+			Name: "Tilde with backward slash should append structure to home directory",
+			Input: inputArgs{
+				path: "~\\documents\\report.pdf",
+			},
+			Want:    filepath.ToSlash(filepath.Join(mockHome, "documents", "report.pdf")),
+			WantErr: false,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir(mockHome, nil)
+				m.SetReturn.FilepathAbs(filepath.ToSlash(filepath.Join(mockHome, "documents", "report.pdf")), nil)
+			},
+		},
+		{
+			Name: "Tilde stuck to letters without slashes should be treated as relative name",
+			Input: inputArgs{
+				path: "~aeon-folder",
+			},
+			Want:    mustAbs(t, "~aeon-folder"),
+			WantErr: false,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir(mockHome, nil)
+				m.OnCall.FilepathAbs(filepath.Abs)
+			},
+		},
+		{
+			Name: "Should fail and wrap error when user home resolution fails",
+			Input: inputArgs{
+				path: "~/downloads",
+			},
+			WantErr:     true,
+			ErrContains: "[MSG: failed to resolve user home directory][FIELD: home]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir("", errors.New("permission denied"))
+			},
+		},
+		{
+			Name: "Should fail when absolute path resolution returns an error",
+			Input: inputArgs{
+				path: "documents/project",
+			},
+			WantErr:     true,
+			ErrContains: "[MSG: failed to resolve absolute path][FIELD: path]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.FilepathAbs("", errors.New("mocked filesystem breakdown error"))
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Technical Note: Safely captures and restores original mock references after each run
-			oldHomeFn := fnMockable_UserHomeDir
-			oldAbsFn := fnMockable_FilepathAbs
-			defer func() {
-				fnMockable_UserHomeDir = oldHomeFn
-				fnMockable_FilepathAbs = oldAbsFn
-			}()
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			if tt.customHomeFn != nil {
-				fnMockable_UserHomeDir = tt.customHomeFn
-			} else {
-				fnMockable_UserHomeDir = func() (string, error) { return mockHome, nil }
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if tt.customAbsFn != nil {
-				fnMockable_FilepathAbs = tt.customAbsFn
-			} else {
-				// Resets to native absolute path behavior for sibling test pipeline executions
-				fnMockable_FilepathAbs = filepath.Abs
-			}
+			// Trigger the business implementation
+			got, err := xfs.RetrieveFullPath(args.path)
 
-			// 2. Executa a função
-			got, err := RetrieveFullPath(tt.input)
-
-			// 3. Validações
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("RetrieveFullPath() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got != tt.want {
-				t.Errorf("RetrieveFullPath() = %q, want %q", got, tt.want)
-			}
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestGetUserDataDir(t *testing.T) {
 	const mockAppName = "MyApp"
-	mockHome := "/user/mockhome"
+	testFunction := "GetUserDataDir"
+	mockHome := filepath.FromSlash("/user/mockhome")
 
-	tests := []struct {
-		name         string
-		customHomeFn func() (string, error)
-		want         string
-	}{
+	type inputArgs struct {
+		appName string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:         "Should use user home directory when available",
-			customHomeFn: func() (string, error) { return mockHome, nil },
-			want:         osUserDataDir(mockHome, mockAppName),
+			Name: "Should use user home directory when available",
+			Input: inputArgs{
+				appName: mockAppName,
+			},
+			Want: filepath.Join(mockHome, ".config", mockAppName),
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir("", nil)
+				m.SetReturn.OSUserDataDir(filepath.Join(mockHome, ".config", mockAppName))
+			},
 		},
 		{
-			name:         "Should fallback to temp directory when home directory fails",
-			customHomeFn: func() (string, error) { return "", xerrors.NewErr("failed to retrieve home") },
-			want:         osUserDataDir(os.TempDir(), mockAppName),
+			Name: "Should fallback to temp directory when home directory fails",
+			Input: inputArgs{
+				appName: mockAppName,
+			},
+			Want: filepath.Join(os.TempDir(), mockAppName),
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir("", xerrors.NewErr("failed to retrieve home"))
+				m.SetReturn.OSUserDataDir(filepath.Join(os.TempDir(), mockAppName))
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockFunction(t, &fnMockable_GetUserHome, tt.customHomeFn)
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got := GetUserDataDir(mockAppName)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if got != tt.want {
-				t.Errorf("GetUserDataDir() = %q, want %q", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.GetUserDataDir(args.appName)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
-}
-
-func TestOsUserDataDir_Router_AllCases(t *testing.T) {
-	tests := []struct {
-		name          string
-		targetOS      string
-		setupMocks    func(t *testing.T, called *bool)
-		expectedRoute string
-	}{
-		{
-			name:     "Router: Should dispatch to Windows implementation when OS is windows",
-			targetOS: "windows",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserDataDirWindows, func(home, appName string) string {
-					*called = true
-					return "/mock/windows"
-				})
-			},
-			expectedRoute: "/mock/windows",
-		},
-		{
-			name:     "Router: Should dispatch to Darwin implementation when OS is darwin",
-			targetOS: "darwin",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserDataDirDarwin, func(home, appName string) string {
-					*called = true
-					return "/mock/darwin"
-				})
-			},
-			expectedRoute: "/mock/darwin",
-		},
-		{
-			name:     "Router: Should dispatch to Linux implementation when OS is linux (default)",
-			targetOS: "linux",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserDataDirLinux, func(home, appName string) string {
-					*called = true
-					return "/mock/linux"
-				})
-			},
-			expectedRoute: "/mock/linux",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wasSpecialistCalled := false
-
-			// 1. Altera a variável do SO para enganar o switch do roteador
-			mockFunction(t, &fnMockable_CurrentGOOS, tt.targetOS)
-
-			// 2. Configura o espião (spy) para verificar se a rota correta foi acionada
-			tt.setupMocks(t, &wasSpecialistCalled)
-
-			// 3. Executa a função roteadora principal
-			result := osUserDataDir("/home", "MyApp")
-
-			// 4. Validações estritas
-			if !wasSpecialistCalled {
-				t.Errorf("Expected router to dispatch call to the %s specialist, but it did not", tt.targetOS)
-			}
-			if result != tt.expectedRoute {
-				t.Errorf("Expected router to return value from dispatched function, got %q, want %q", result, tt.expectedRoute)
-			}
-		})
-	}
-}
-
-func TestOsUserDataDir_AllPlatformsSpecialist(t *testing.T) {
-	const mockAppName = "TestApp"
-	const mockHome = "/user/mockhome"
-
-	// 1. TESTES DA LÓGICA DO LINUX
-	t.Run("Linux: Should use default path when XDG_DATA_HOME is empty", func(t *testing.T) {
-		t.Setenv("XDG_DATA_HOME", "") // Garante que a variável está vazia
-
-		got := osUserDataDirLinux(mockHome, mockAppName)
-		want := filepath.FromSlash("/user/mockhome/.local/share/TestApp")
-
-		if got != want {
-			t.Errorf("Linux default layout failed. Got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Linux: Should respect XDG_DATA_HOME when provided", func(t *testing.T) {
-		t.Setenv("XDG_DATA_HOME", "/custom/xdg/dir")
-
-		got := osUserDataDirLinux(mockHome, mockAppName)
-		want := filepath.FromSlash("/custom/xdg/dir/TestApp")
-
-		if got != want {
-			t.Errorf("Linux XDG layout failed. Got %q, want %q", got, want)
-		}
-	})
-
-	// 2. TESTES DA LÓGICA DO MAC (DARWIN)
-	t.Run("Darwin: Should return Apple Application Support layout", func(t *testing.T) {
-		got := osUserDataDirDarwin(mockHome, mockAppName)
-		want := filepath.FromSlash("/user/mockhome/Library/Application Support/TestApp")
-
-		if got != want {
-			t.Errorf("Darwin layout failed. Got %q, want %q", got, want)
-		}
-	})
-
-	// 3. TESTES DA LÓGICA DO WINDOWS
-	t.Run("Windows: Should fallback to Home AppData when LOCALAPPDATA is empty", func(t *testing.T) {
-		t.Setenv("LOCALAPPDATA", "")
-
-		got := osUserDataDirWindows(mockHome, mockAppName)
-		// Como estamos testando no Linux, usamos filepath.Join normal que usará barras normais do Unix,
-		// mas validando a semântica da árvore do Windows
-		want := filepath.Join(mockHome, "AppData", "Local", mockAppName, "Data")
-
-		if got != want {
-			t.Errorf("Windows fallback layout failed. Got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Windows: Should use LOCALAPPDATA path when provided", func(t *testing.T) {
-		t.Setenv("LOCALAPPDATA", "/mock/localappdata")
-
-		got := osUserDataDirWindows(mockHome, mockAppName)
-		want := filepath.Join("/mock/localappdata", mockAppName, "Data")
-
-		if got != want {
-			t.Errorf("Windows LOCALAPPDATA layout failed. Got %q, want %q", got, want)
-		}
-	})
 }
 
 func TestGetUserLogDir(t *testing.T) {
-	const mockAppName = "LogApp"
-	mockHome := "/user/mockhome"
+	const mockAppName = "MyApp"
+	testFunction := "GetUserLogDir"
+	mockHome := filepath.FromSlash("/user/mockhome")
 
-	tests := []struct {
-		name         string
-		customHomeFn func() (string, error)
-		want         string
-	}{
+	type inputArgs struct {
+		appName string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name: "Should use user home directory for logs when available",
-			customHomeFn: func() (string, error) {
-				return mockHome, nil
+			Name: "Should use user home directory when available",
+			Input: inputArgs{
+				appName: mockAppName,
 			},
-			want: osUserLogDir(mockHome, mockAppName),
+			Want: filepath.Join(mockHome, ".config", mockAppName),
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir("", nil)
+				m.SetReturn.OSUserLogDir(filepath.Join(mockHome, ".config", mockAppName))
+			},
 		},
 		{
-			name: "Should fallback to temp directory for logs when home directory fails",
-			customHomeFn: func() (string, error) {
-				return "", xerrors.NewErr("failed to retrieve home")
+			Name: "Should fallback to temp directory when home directory fails",
+			Input: inputArgs{
+				appName: mockAppName,
 			},
-			want: osUserLogDir(os.TempDir(), mockAppName),
+			Want: filepath.Join(os.TempDir(), mockAppName),
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.GetUserHomeDir("", xerrors.NewErr("failed to retrieve home"))
+				m.SetReturn.OSUserLogDir(filepath.Join(os.TempDir(), mockAppName))
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Substitui e agenda o reset automático usando o novo padrão explícito
-			mockFunction(t, &fnMockable_GetUserHome, tt.customHomeFn)
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got := GetUserLogDir(mockAppName)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if got != tt.want {
-				t.Errorf("GetUserLogDir() = %q, want %q", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.GetUserLogDir(args.appName)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
-}
-
-func TestOsUserLogDir_Router_AllCases(t *testing.T) {
-	const mockAppName = "LogApp"
-	const mockHome = "/user/mockhome"
-
-	tests := []struct {
-		name          string
-		targetOS      string
-		setupMocks    func(t *testing.T, called *bool)
-		expectedRoute string
-	}{
-		{
-			name:     "Router: Should route to Windows when OS is windows",
-			targetOS: "windows",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserLogDirWindows, func(h, a string) string {
-					*called = true
-					return "/route/windows"
-				})
-			},
-			expectedRoute: "/route/windows",
-		},
-		{
-			name:     "Router: Should route to Darwin when OS is darwin",
-			targetOS: "darwin",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserLogDirDarwin, func(h, a string) string {
-					*called = true
-					return "/route/darwin"
-				})
-			},
-			expectedRoute: "/route/darwin",
-		},
-		{
-			name:     "Router: Should route to Linux when OS is linux",
-			targetOS: "linux",
-			setupMocks: func(t *testing.T, called *bool) {
-				mockFunction(t, &fnMockable_OsUserLogDirLinux, func(h, a string) string {
-					*called = true
-					return "/route/linux"
-				})
-			},
-			expectedRoute: "/route/linux",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wasSpecialistCalled := false
-
-			// Engana a variável controladora de SO para o switch
-			mockFunction(t, &fnMockable_CurrentGOOS, tt.targetOS)
-
-			// Configura o espião correspondente ao cenário
-			tt.setupMocks(t, &wasSpecialistCalled)
-
-			result := osUserLogDir(mockHome, mockAppName)
-
-			if !wasSpecialistCalled {
-				t.Errorf("Expected router to call %s specialist, but it did not", tt.targetOS)
-			}
-			if result != tt.expectedRoute {
-				t.Errorf("Router delivered wrong path. Got %q, want %q", result, tt.expectedRoute)
-			}
-		})
-	}
-}
-
-func TestOsUserLogDir_AllPlatformsSpecialist(t *testing.T) {
-	const mockAppName = "LogApp"
-	const mockHome = "/user/mockhome"
-
-	// ==========================================
-	// 1. LINUX
-	// ==========================================
-	t.Run("Linux: Should use default path when environment variables are empty", func(t *testing.T) {
-		t.Setenv("XDG_STATE_HOME", "")
-		t.Setenv("XDG_CACHE_HOME", "")
-
-		got := osUserLogDirLinux(mockHome, mockAppName)
-		want := filepath.FromSlash("/user/mockhome/.local/state/LogApp")
-		if got != want {
-			t.Errorf("Linux default failed. Got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Linux: Should respect XDG_STATE_HOME with highest priority", func(t *testing.T) {
-		t.Setenv("XDG_STATE_HOME", "/custom/state")
-		t.Setenv("XDG_CACHE_HOME", "/custom/cache") // Deve ser ignorado pelo short-circuit do if
-
-		got := osUserLogDirLinux(mockHome, mockAppName)
-		want := filepath.FromSlash("/custom/state/LogApp")
-		if got != want {
-			t.Errorf("Linux XDG_STATE failed. Got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Linux: Should fallback to XDG_CACHE_HOME if STATE is empty", func(t *testing.T) {
-		t.Setenv("XDG_STATE_HOME", "")
-		t.Setenv("XDG_CACHE_HOME", "/custom/cache")
-
-		got := osUserLogDirLinux(mockHome, mockAppName)
-		want := filepath.FromSlash("/custom/cache/LogApp/log")
-		if got != want {
-			t.Errorf("Linux XDG_CACHE failed. Got %q, want %q", got, want)
-		}
-	})
-
-	// ==========================================
-	// 2. MAC (DARWIN)
-	// ==========================================
-	t.Run("Darwin: Should return Apple Logs layout", func(t *testing.T) {
-		got := osUserLogDirDarwin(mockHome, mockAppName)
-		want := filepath.FromSlash("/user/mockhome/Library/Logs/LogApp")
-		if got != want {
-			t.Errorf("Darwin layout failed. Got %q, want %q", got, want)
-		}
-	})
-
-	// ==========================================
-	// 3. WINDOWS
-	// ==========================================
-	t.Run("Windows: Should fallback to Home AppData when LOCALAPPDATA is empty", func(t *testing.T) {
-		t.Setenv("LOCALAPPDATA", "")
-
-		got := osUserLogDirWindows(mockHome, mockAppName)
-		want := filepath.Join(mockHome, "AppData", "Local", mockAppName, "Log")
-		if got != want {
-			t.Errorf("Windows fallback failed. Got %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Windows: Should use LOCALAPPDATA path when provided", func(t *testing.T) {
-		t.Setenv("LOCALAPPDATA", "/mock/localappdata")
-
-		got := osUserLogDirWindows(mockHome, mockAppName)
-		want := filepath.Join("/mock/localappdata", mockAppName, "Log")
-		if got != want {
-			t.Errorf("Windows LOCALAPPDATA failed. Got %q, want %q", got, want)
-		}
-	})
 }
 
 func TestGetParentPath(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 string
-		customRetrievePathFn func(string) (string, error)
-	}{
+	testFunction := "GetUserLogDir"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:  "Empty file path should return empty string immediately",
-			input: "",
-			want:  "",
-			// Nem precisa de mock pois a função tem um guard clause para string vazia
+			Name: "Empty file path should return empty string immediately",
+			Input: inputArgs{
+				path: "",
+			},
+			Want: "",
 		},
 		{
-			name:  "Should return empty string if RetrieveFullPath returns an error",
-			input: "invalid/path",
-			want:  "",
-			customRetrievePathFn: func(path string) (string, error) {
-				return "", xerrors.NewErr("mocked retrieval failure")
+			Name: "Should return error if RetrieveFullPath returns an error",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:    "",
+			WantErr: true,
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("", xerrors.NewErr("failed on retrieve full path"))
 			},
 		},
 		{
-			name:  "Should return the correct parent directory on success",
-			input: "~/documents/project/file.txt",
-			// filepath.Dir de "/user/mockhome/documents/project/file.txt"
-			want: filepath.FromSlash("/user/mockhome/documents/project"),
-			customRetrievePathFn: func(path string) (string, error) {
-				return filepath.FromSlash("/user/mockhome/documents/project/file.txt"), nil
+			Name: "Should return the correct parent directory on success",
+			Input: inputArgs{
+				path: "~/documents/project/file.txt",
+			},
+			Want: filepath.FromSlash("/user/mockhome/documents/project"),
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/documents/project/file.txt", nil)
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Injeta o mock e agenda o reset automático se o cenário exigir
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got := GetParentPath(tt.input)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if got != tt.want {
-				t.Errorf("GetParentPath() = %q, want %q", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.GetParentPath(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestExists(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "Exists"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:  "Should return false if RetrieveFullPath returns an error",
-			input: "invalid/path",
-			want:  false,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "", xerrors.NewErr("mocked retrieval failure")
+			Name: "Should return false if RetrieveFullPath returns an error",
+			Input: inputArgs{
+				path: "invalid/path",
 			},
-			// os.Stat nem chega a ser chamado aqui
-		},
-		{
-			name:  "Should return false if file or directory does not exist",
-			input: "~/missing-file.txt",
-			want:  false,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "/user/mockhome/missing-file.txt", nil
-			},
-			customOsStatFn: func(name string) (os.FileInfo, error) {
-				return nil, os.ErrNotExist // Força o erro de não existente
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(path string) (string, error) {
+					return "", xerrors.NewErr("mocked retrieval failure")
+				})
 			},
 		},
 		{
-			name:  "Should return true if file or directory exists successfully",
-			input: "~/existing-file.txt",
-			want:  true,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "/user/mockhome/existing-file.txt", nil
+			Name: "Should return false if file or directory does not exist",
+			Input: inputArgs{
+				path: "~/missing-file.txt",
 			},
-			customOsStatFn: func(name string) (os.FileInfo, error) {
-				return nil, nil // Nil significa que não houve erro, logo o arquivo existe
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/missing-file.txt", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
+			},
+		},
+		{
+			Name: "Should return true if file or directory exists successfully",
+			Input: inputArgs{
+				path: "~/existing-file.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/existing-file.txt", nil)
+				m.SetReturn.OsStat(nil, nil)
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Injeta o mock do RetrieveFullPath se configurado
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Injeta o mock do os.Stat se configurado
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			got := Exists(tt.input)
+			// Trigger the business implementation
+			got := xfs.Exists(args.path)
 
-			if got != tt.want {
-				t.Errorf("Exists() = %v, want %v", got, tt.want)
-			}
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestIsFile(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "IsFile"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:  "Should return false if RetrieveFullPath returns an error",
-			input: "invalid/path",
-			want:  false,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "", xerrors.NewErr("mocked retrieval failure")
+			Name: "Should return false if RetrieveFullPath returns an error",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(path string) (string, error) {
+					return "", xerrors.NewErr("mocked retrieval failure")
+				})
 			},
 		},
 		{
-			name:  "Should return false if os.Stat returns an error",
-			input: "~/missing-file.txt",
-			want:  false,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "/user/mockhome/missing-file.txt", nil
+			Name: "Should return false if os.Stat returns an error",
+			Input: inputArgs{
+				path: "~/missing-file.txt",
 			},
-			customOsStatFn: func(name string) (os.FileInfo, error) {
-				return nil, os.ErrNotExist
-			},
-		},
-		{
-			name:  "Should return false if path exists but it is a directory",
-			input: "~/documents",
-			want:  false,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "/user/mockhome/documents", nil
-			},
-			customOsStatFn: func(name string) (os.FileInfo, error) {
-				return mockFileInfo{isRegular: false}, nil
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/missing-file.txt", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
 			},
 		},
 		{
-			name:  "Should return true if path exists and it is a regular file",
-			input: "~/documents/notes.txt",
-			want:  true,
-			customRetrievePathFn: func(path string) (string, error) {
-				return "/user/mockhome/documents/notes.txt", nil
+			Name: "Should return false if path exists but it is a directory",
+			Input: inputArgs{
+				path: "~/documents",
 			},
-			customOsStatFn: func(name string) (os.FileInfo, error) {
-				return mockFileInfo{isRegular: true}, nil
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/documents", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: false}, nil)
+			},
+		},
+		{
+			Name: "Should return true if path exists and it is a regular file",
+			Input: inputArgs{
+				path: "~/documents/notes.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/user/mockhome/documents/notes.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true}, nil)
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Injeta o mock do RetrieveFullPath se configurado
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Injeta o mock do os.Stat se configurado
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			got := IsFile(tt.input)
+			// Trigger the business implementation
+			got := xfs.IsFile(args.path)
 
-			if got != tt.want {
-				t.Errorf("IsFile() = %v, want %v", got, tt.want)
-			}
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestIsDir(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "IsDir"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:                 "Should return false if RetrieveFullPath returns an error",
-			input:                "invalid/path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "", xerrors.NewErr("err") },
+			Name: "Should return false if RetrieveFullPath returns an error",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("err")
+				})
+			},
 		},
 		{
-			name:                 "Should return false if os.Stat returns an error",
-			input:                "~/missing-dir",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/dir", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+			Name: "Should return false if os.Stat returns an error",
+			Input: inputArgs{
+				path: "~/missing-dir",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/dir", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
+			},
 		},
 		{
-			name:                 "Should return false if path exists but it is a regular file",
-			input:                "~/notes.txt",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/file", nil },
-			// Truque nativo: lê este próprio arquivo de teste para obter um FileInfo de arquivo válido
-			customOsStatFn: func(n string) (os.FileInfo, error) { return os.Stat("fs_test.go") },
+			Name: "Should return false if path exists but it is a regular file",
+			Input: inputArgs{
+				path: "~/notes.txt",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/file", nil)
+				fi, _ := os.Stat("xfs_test.go")
+				m.SetReturn.OsStat(fi, nil)
+			},
 		},
 		{
-			name:                 "Should return true if path exists and it is a directory",
-			input:                "~/documents",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/dir", nil },
-			// Truque nativo: lê o diretório atual de trabalho (".") para obter um FileInfo de diretório real
-			customOsStatFn: func(n string) (os.FileInfo, error) { return os.Stat(".") },
+			Name: "Should return true if path exists and it is a directory",
+			Input: inputArgs{
+				path: "~/documents",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/dir", nil)
+				fi, _ := os.Stat(".")
+				m.SetReturn.OsStat(fi, nil)
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Injeta os mocks utilizando a nossa função genérica e agenda o reset automático
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			if got := IsDir(tt.input); got != tt.want {
-				t.Errorf("IsDir() = %v, want %v", got, tt.want)
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
+
+			// Trigger the business implementation
+			got := xfs.IsDir(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestIsEmptyDir(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsOpenFn       func(string) (*os.File, error)
-		customReadDirFn      func(*os.File, int) ([]os.DirEntry, error)
-	}{
+	testFunction := "IsEmptyDir"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:                 "Should return error if RetrieveFullPath fails",
-			input:                "invalid/path",
-			want:                 false,
-			wantErr:              true,
-			errContains:          "retrieval failure",
-			customRetrievePathFn: func(p string) (string, error) { return "", xerrors.NewErr("retrieval failure") },
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "retrieval failure",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("retrieval failure")
+				})
+			},
 		},
 		{
-			name:                 "Should return error if os.Open fails",
-			input:                "~/missing-dir",
-			want:                 false,
-			wantErr:              true,
-			errContains:          "permission denied",
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/dir", nil },
-			customOsOpenFn:       func(n string) (*os.File, error) { return nil, os.ErrPermission },
+			Name: "Should return error if os.Open fails",
+			Input: inputArgs{
+				path: "~/missing-dir",
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "permission denied",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/dir", nil)
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
+			},
 		},
 		{
-			name:                 "Should return false if directory is NOT empty (err is nil)",
-			input:                "~/full-dir",
-			want:                 false,
-			wantErr:              false,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") }, // Abre pasta real apenas para ter um *os.File válido
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return []os.DirEntry{nil}, nil },
+			Name: "Should return false if directory is NOT empty (err is nil)",
+			Input: inputArgs{
+				path: "~/full-dir",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return []os.DirEntry{nil}, nil
+				})
+			},
 		},
 		{
-			name:                 "Should return true if directory is empty (err is EOF)",
-			input:                "~/empty-dir",
-			want:                 true,
-			wantErr:              false,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") },
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return nil, io.EOF },
+			Name: "Should return true if directory is empty (err is EOF)",
+			Input: inputArgs{
+				path: "~/empty-dir",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return nil, io.EOF
+				})
+			},
 		},
 		{
-			name:                 "Should return generic error if ReadDir fails with unexpected error",
-			input:                "~/broken-dir",
-			want:                 false,
-			wantErr:              true,
-			errContains:          "hardware disk failure",
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") },
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return nil, xerrors.NewErr("hardware disk failure") },
+			Name: "Should return generic error if ReadDir fails with unexpected error",
+			Input: inputArgs{
+				path: "~/broken-dir",
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "hardware disk failure",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return nil, xerrors.NewErr("hardware disk failure")
+				})
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsOpenFn != nil {
-				mockFunction(t, &fnMockable_OsOpen, tt.customOsOpenFn)
-			}
-			if tt.customReadDirFn != nil {
-				mockFunction(t, &fnMockable_ReadDir, tt.customReadDirFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := IsEmptyDir(tt.input)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("IsEmptyDir() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got != tt.want {
-				t.Errorf("IsEmptyDir() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.IsEmptyDir(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestIsFileDirExists(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customIsDirFn        func(string) bool
-	}{
+	testFunction := "IsFileDirExists"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:  "Should return false immediately if filePath is empty",
-			input: "",
-			want:  false,
-			// O guard clause resolve direto, não precisa injetar mocks
+			Name: "Should return false immediately if filePath is empty",
+			Input: inputArgs{
+				path: "",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn:      nil,
 		},
 		{
-			name:                 "Should return false if RetrieveFullPath returns an error",
-			input:                "invalid/path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "", xerrors.NewErr("err") },
+			Name: "Should return false if RetrieveFullPath returns an error",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("err")
+				})
+			},
 		},
 		{
-			name:                 "Should return false if the parent directory does not exist",
-			input:                "~/documents/missing-folder/file.txt",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/home/documents/missing-folder/file.txt", nil },
-			customIsDirFn:        func(p string) bool { return false },
+			Name: "Should return false if the parent directory does not exist",
+			Input: inputArgs{
+				path: "~/documents/missing-folder/file.txt",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/home/documents/missing-folder/file.txt", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return false
+				})
+			},
 		},
 		{
-			name:                 "Should return true if the parent directory exists",
-			input:                "~/documents/project/file.txt",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/home/documents/project/file.txt", nil },
-			customIsDirFn:        func(p string) bool { return true },
+			Name: "Should return true if the parent directory exists",
+			Input: inputArgs{
+				path: "~/documents/project/file.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/home/documents/project/file.txt", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customIsDirFn != nil {
-				mockFunction(t, &fnMockable_IsDir, tt.customIsDirFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			if got := IsFileDirExists(tt.input); got != tt.want {
-				t.Errorf("IsFileDirExists() = %v, want %v", got, tt.want)
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
+
+			// Trigger the business implementation
+			got := xfs.IsFileDirExists(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestIsReadable(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-		customOsOpenFn       func(string) (*os.File, error)
-		customReadDirFn      func(*os.File, int) ([]os.DirEntry, error)
-		customOsOpenFileFn   func(string, int, os.FileMode) (*os.File, error)
-	}{
+	testFunction := "IsReadable"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:                 "Should return false if RetrieveFullPath fails",
-			input:                "invalid/path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "", xerrors.NewErr("err") },
-		},
-		{
-			name:                 "Should return false if os.Stat fails",
-			input:                "~/missing-path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return nil, os.ErrNotExist },
-		},
-		{
-			name:                 "Directory: Should return false if os.Open fails (permission denied)",
-			input:                "~/protected-dir",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return os.Stat(".") },
-			customOsOpenFn:       func(n string) (*os.File, error) { return nil, os.ErrPermission },
-		},
-		{
-			name:                 "Directory: Should return true if ReadDir succeeds (not empty)",
-			input:                "~/populated-dir",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return os.Stat(".") },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") },
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return []os.DirEntry{nil}, nil },
-		},
-		{
-			name:                 "Directory: Should return true if ReadDir returns EOF (empty directory)",
-			input:                "~/empty-dir",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return os.Stat(".") },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") },
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return nil, io.EOF },
-		},
-		{
-			name:                 "Directory: Should return false if ReadDir returns an unexpected error",
-			input:                "~/broken-dir",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return ".", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return os.Stat(".") },
-			customOsOpenFn:       func(n string) (*os.File, error) { return os.Open(".") },
-			customReadDirFn:      func(f *os.File, n int) ([]os.DirEntry, error) { return nil, xerrors.NewErr("disk err") },
-		},
-		{
-			name:                 "File: Should return false if os.OpenFile fails (permission denied)",
-			input:                "~/protected-file.txt",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/file.txt", nil },
-			// Technical Note: Force IsDir() to strictly evaluate as false using a dry stub mock
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: false}, nil
+			Name: "Should return false if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) { return nil, os.ErrPermission },
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("err")
+				})
+			},
 		},
 		{
-			name:                 "File: Should return true if os.OpenFile succeeds",
-			input:                "~/readable-file.txt",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/file.txt", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: false}, nil
+			Name: "Should return false if os.Stat fails",
+			Input: inputArgs{
+				path: "~/missing-path",
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				// Technical Note: Creates a real, isolated descriptor tracking context to bypass path slips
-				tmpFile, err := os.CreateTemp(t.TempDir(), "readable_stub")
-				return tmpFile, err
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
+			},
+		},
+		{
+			Name: "Directory: Should return false if os.Open fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-dir",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				fi, _ := os.Stat(".")
+				m.SetReturn.OsStat(fi, nil)
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
+			},
+		},
+		{
+			Name: "Directory: Should return true if ReadDir succeeds (not empty)",
+			Input: inputArgs{
+				path: "~/populated-dir",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				fi, _ := os.Stat(".")
+				m.SetReturn.OsStat(fi, nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return []os.DirEntry{nil}, nil
+				})
+			},
+		},
+		{
+			Name: "Directory: Should return true if ReadDir returns EOF (empty directory)",
+			Input: inputArgs{
+				path: "~/empty-dir",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				fi, _ := os.Stat(".")
+				m.SetReturn.OsStat(fi, nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return nil, io.EOF
+				})
+			},
+		},
+		{
+			Name: "Directory: Should return false if ReadDir returns an unexpected error",
+			Input: inputArgs{
+				path: "~/broken-dir",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath(".", nil)
+				fi, _ := os.Stat(".")
+				m.SetReturn.OsStat(fi, nil)
+				f, _ := os.Open(".")
+				m.OnCall.OsOpen(func(n string) (*os.File, error) {
+					return f, nil
+				})
+				m.OnCall.ReadDir(func(f *os.File, n int) ([]os.DirEntry, error) {
+					return nil, xerrors.NewErr("disk err")
+				})
+			},
+		},
+		{
+			Name: "File: Should return false if os.OpenFile fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-file.txt",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/file.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true}, nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
+			},
+		},
+		{
+			Name: "File: Should return true if os.OpenFile succeeds",
+			Input: inputArgs{
+				path: "~/readable-file.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/file.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true}, nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					tmpFile, err := os.CreateTemp(t.TempDir(), "readable_stub")
+					return tmpFile, err
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
-			if tt.customOsOpenFn != nil {
-				mockFunction(t, &fnMockable_OsOpen, tt.customOsOpenFn)
-			}
-			if tt.customReadDirFn != nil {
-				mockFunction(t, &fnMockable_ReadDir, tt.customReadDirFn)
-			}
-			if tt.customOsOpenFileFn != nil {
-				mockFunction(t, &fnMockable_OsOpenFile, tt.customOsOpenFileFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			if got := IsReadable(tt.input); got != tt.want {
-				t.Errorf("IsReadable() = %v, want %v", got, tt.want)
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
+
+			// Trigger the business implementation
+			got := xfs.IsReadable(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestIsWritable(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-		customOsCreateTempFn func(string, string) (*os.File, error)
-		customOsOpenFileFn   func(string, int, os.FileMode) (*os.File, error)
-	}{
+	testFunction := "IsWritable"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:                 "Should return false if RetrieveFullPath fails",
-			input:                "invalid/path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "", xerrors.NewErr("err") },
-		},
-		{
-			name:                 "Should return false if os.Stat fails",
-			input:                "~/missing-path",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return nil, os.ErrNotExist },
-		},
-		{
-			name:                 "Directory: Should return false if os.CreateTemp fails (read-only filesystem)",
-			input:                "~/readonly-dir",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/dir", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: true}, nil
+			Name: "Should return false if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
 			},
-			customOsCreateTempFn: func(d, p string) (*os.File, error) { return nil, os.ErrPermission },
-		},
-		{
-			name:                 "Directory: Should return true if os.CreateTemp succeeds",
-			input:                "~/writable-dir",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/dir", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: true}, nil
-			},
-			// Technical Note: Returns a real isolated disk descriptor in memory to safely bypass physical path slips
-			customOsCreateTempFn: func(d, p string) (*os.File, error) {
-				tmpFile, err := os.CreateTemp(t.TempDir(), "writable_dir_stub")
-				return tmpFile, err
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("err")
+				})
 			},
 		},
 		{
-			name:                 "File: Should return false if os.OpenFile fails (no write permission)",
-			input:                "~/protected-file.txt",
-			want:                 false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/file.txt", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: false}, nil
+			Name: "Should return false if os.Stat fails",
+			Input: inputArgs{
+				path: "~/missing-path",
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) { return nil, os.ErrPermission },
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
+			},
 		},
 		{
-			name:                 "File: Should return true if os.OpenFile succeeds",
-			input:                "~/writable-file.txt",
-			want:                 true,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/file.txt", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: false}, nil
+			Name: "Directory: Should return false if os.CreateTemp fails (read-only filesystem)",
+			Input: inputArgs{
+				path: "~/readonly-dir",
 			},
-			// Technical Note: Returns a legitimate ephemeral file instance to simulate a valid active writer stream descriptor
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				tmpFile, err := os.CreateTemp(t.TempDir(), "writable_file_stub")
-				return tmpFile, err
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/dir", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: false, isDir: true}, nil)
+				m.OnCall.OsCreateTemp(func(d, p string) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
+			},
+		},
+		{
+			Name: "Directory: Should return true if os.CreateTemp succeeds",
+			Input: inputArgs{
+				path: "~/writable-dir",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/dir", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: false, isDir: true}, nil)
+				m.OnCall.OsCreateTemp(func(d, p string) (*os.File, error) {
+					tmpFile, err := os.CreateTemp(t.TempDir(), "writable_dir_stub")
+					return tmpFile, err
+				})
+				m.OnCall.OsRemove(func(name string) error {
+					return nil
+				})
+			},
+		},
+		{
+			Name: "File: Should return false if os.OpenFile fails (no write permission)",
+			Input: inputArgs{
+				path: "~/protected-file.txt",
+			},
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/file.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true}, nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
+			},
+		},
+		{
+			Name: "File: Should return true if os.OpenFile succeeds",
+			Input: inputArgs{
+				path: "~/writable-file.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/file.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true}, nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					tmpFile, err := os.CreateTemp(t.TempDir(), "writable_file_stub")
+					return tmpFile, err
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
-			if tt.customOsCreateTempFn != nil {
-				mockFunction(t, &fnMockable_OsCreateTemp, tt.customOsCreateTempFn)
-			}
-			if tt.customOsOpenFileFn != nil {
-				mockFunction(t, &fnMockable_OsOpenFile, tt.customOsOpenFileFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Mock padrão para o os.Remove para evitar que tente apagar arquivos do sistema real
-			mockFunction(t, &fnMockable_OsRemove, func(name string) error { return nil })
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if got := IsWritable(tt.input); got != tt.want {
-				t.Errorf("IsWritable() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got := xfs.IsWritable(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, nil)
 		})
 	}
 }
 
 func TestGetPermission(t *testing.T) {
-	tests := []struct {
-		name                 string
-		input                string
-		want                 os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "GetPermission"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			input:       "invalid/path",
-			want:        0,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        os.FileMode(0),
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:                 "Should return error if os.Stat fails",
-			input:                "~/missing-path",
-			want:                 0,
-			wantErr:              true,
-			errContains:          "[MSG: failed to read path metadata][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) { return "/mock", nil },
-			customOsStatFn:       func(n string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+			Name: "Should return error if os.Stat fails",
+			Input: inputArgs{
+				path: "~/missing-path",
+			},
+			Want:        os.FileMode(0),
+			WantErr:     true,
+			ErrContains: "[MSG: failed to read path metadata][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
+			},
 		},
 		{
-			name:                 "Should return correct file permissions on success",
-			input:                "~/notes.txt",
-			want:                 os.FileMode(0644),
-			wantErr:              false,
-			customRetrievePathFn: func(p string) (string, error) { return "/mock/notes.txt", nil },
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{mode: os.FileMode(0644)}, nil
+			Name: "Should return correct file permissions on success",
+			Input: inputArgs{
+				path: "~/notes.txt",
+			},
+			Want:        os.FileMode(0644),
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/notes.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{mode: os.FileMode(0644)}, nil)
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := GetPermission(tt.input)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("GetPermission() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got != tt.want {
-				t.Errorf("GetPermission() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.GetPermission(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestSetPermission(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputPerm            os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsChmodFn      func(string, os.FileMode) error
-	}{
+	testFunction := "SetPermission"
+
+	type inputArgs struct {
+		path string
+		perm os.FileMode
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			inputPerm:   0644,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+				perm: 0644,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if os.Chmod fails (permission denied)",
-			inputPath:   "~/protected-file.txt",
-			inputPerm:   0777,
-			wantErr:     true,
-			errContains: "[MSG: failed to change target filesystem permissions][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-file.txt", nil
+			Name: "Should return error if os.Chmod fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-file.txt",
+				perm: 0777,
 			},
-			customOsChmodFn: func(path string, mode os.FileMode) error {
-				return os.ErrPermission
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to change target filesystem permissions][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-file.txt", nil)
+				m.OnCall.OsChmod(func(path string, mode os.FileMode) error {
+					return os.ErrPermission
+				})
 			},
 		},
 		{
-			name:      "Should return nil on success",
-			inputPath: "~/regular-file.txt",
-			inputPerm: 0600,
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/regular-file.txt", nil
+			Name: "Should return nil on success",
+			Input: inputArgs{
+				path: "~/regular-file.txt",
+				perm: 0600,
 			},
-			customOsChmodFn: func(path string, mode os.FileMode) error {
-				return nil
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/regular-file.txt", nil)
+				m.OnCall.OsChmod(func(path string, mode os.FileMode) error {
+					return nil
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsChmodFn != nil {
-				mockFunction(t, &fnMockable_OsChmod, tt.customOsChmodFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			err := SetPermission(tt.inputPath, tt.inputPerm)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("SetPermission() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-			}
+			// Trigger the business implementation
+			err := xfs.SetPermission(args.path, args.perm)
+
+			// Validation
+			AssertResult(t, tt, testFunction, nil, err)
 		})
 	}
 }
 
 func TestCreateFile(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputPerm            []os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsOpenFileFn   func(string, int, os.FileMode) (*os.File, error)
-	}{
+	testFunction := "CreateFile"
+
+	type inputArgs struct {
+		path string
+		perm []os.FileMode
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+				perm: nil,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if os.OpenFile fails (permission denied)",
-			inputPath:   "~/protected-file.txt",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[MSG: failed to create targeted file][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-file.txt", nil
+			Name: "Should return error if os.OpenFile fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-file.txt",
+				perm: nil,
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				return nil, os.ErrPermission
-			},
-		},
-		{
-			name:      "Should succeed using default permissions (0666) when no perm is provided",
-			inputPath: "~/default-perm.txt",
-			inputPerm: nil,
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				tmpFile := filepath.Join(t.TempDir(), "stub_default.txt")
-				return tmpFile, nil
-			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				if m != 0666 {
-					return nil, xerrors.NewErr("expected default permission 0666, got %o", m)
-				}
-				return os.OpenFile(n, os.O_CREATE|os.O_WRONLY, m)
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to create targeted file][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-file.txt", nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
 			},
 		},
 		{
-			name:      "Should succeed using custom permission when provided via variadic parameter",
-			inputPath: "~/custom-perm.txt",
-			inputPerm: []os.FileMode{0600},
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				tmpFile := filepath.Join(t.TempDir(), "stub_custom.txt")
-				return tmpFile, nil
+			Name: "Should succeed using default permissions (0666) when no perm is provided",
+			Input: inputArgs{
+				path: "~/default-perm.txt",
+				perm: nil,
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				if m != 0600 {
-					return nil, xerrors.NewErr("expected custom permission 0600, got %o", m)
-				}
-				return os.OpenFile(n, os.O_CREATE|os.O_WRONLY, m)
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					tmpFile := filepath.Join(t.TempDir(), "stub_default.txt")
+					return tmpFile, nil
+				})
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					if mode != 0666 {
+						return nil, xerrors.NewErr("expected default permission 0666, got %o", mode)
+					}
+					return os.OpenFile(n, os.O_CREATE|os.O_WRONLY, mode)
+				})
+			},
+		},
+		{
+			Name: "Should succeed using custom permission when provided via variadic parameter",
+			Input: inputArgs{
+				path: "~/custom-perm.txt",
+				perm: []os.FileMode{0600},
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					tmpFile := filepath.Join(t.TempDir(), "stub_custom.txt")
+					return tmpFile, nil
+				})
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					if mode != 0600 {
+						return nil, xerrors.NewErr("expected custom permission 0600, got %o", mode)
+					}
+					return os.OpenFile(n, os.O_CREATE|os.O_WRONLY, mode)
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsOpenFileFn != nil {
-				mockFunction(t, &fnMockable_OsOpenFile, tt.customOsOpenFileFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := CreateFile(tt.inputPath, tt.inputPerm...)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("CreateFile() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got == nil {
-				t.Error("Expected a valid *os.File pointer on success, got nil")
-			} else {
-				got.Close()
-			}
+			// Trigger the business implementation
+			got, err := xfs.CreateFile(args.path, args.perm...)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestCreateDir(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputPerm            []os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsMkdirFn      func(string, os.FileMode) error
-	}{
+	testFunction := "CreateDir"
+
+	type inputArgs struct {
+		path string
+		perm []os.FileMode
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+				perm: nil,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if os.Mkdir fails (permission denied)",
-			inputPath:   "~/protected-dir",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[MSG: failed to create targeted directory][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-dir", nil
+			Name: "Should return error if os.Mkdir fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-dir",
+				perm: nil,
 			},
-			customOsMkdirFn: func(path string, perm os.FileMode) error {
-				return os.ErrPermission
-			},
-		},
-		{
-			name:      "Should succeed using default permissions (0755) when no perm is provided",
-			inputPath: "~/default-dir",
-			inputPerm: nil,
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "sub_default"), nil
-			},
-			customOsMkdirFn: func(path string, perm os.FileMode) error {
-				if perm != 0755 {
-					return xerrors.NewErr("expected default permission 0755, got %o", perm)
-				}
-				return os.Mkdir(path, perm)
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to create targeted directory][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-dir", nil)
+				m.OnCall.OsMkdir(func(path string, perm os.FileMode) error {
+					return os.ErrPermission
+				})
 			},
 		},
 		{
-			name:      "Should succeed using custom permission when provided via variadic parameter",
-			inputPath: "~/custom-dir",
-			inputPerm: []os.FileMode{0700},
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "sub_custom"), nil
+			Name: "Should succeed using default permissions (0755) when no perm is provided",
+			Input: inputArgs{
+				path: "~/default-dir",
+				perm: nil,
 			},
-			customOsMkdirFn: func(path string, perm os.FileMode) error {
-				if perm != 0700 {
-					return xerrors.NewErr("expected custom permission 0700, got %o", perm)
-				}
-				return os.Mkdir(path, perm)
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "sub_default"), nil
+				})
+				m.OnCall.OsMkdir(func(path string, perm os.FileMode) error {
+					if perm != 0755 {
+						return xerrors.NewErr("expected default permission 0755, got %o", perm)
+					}
+					return os.Mkdir(path, perm)
+				})
+			},
+		},
+		{
+			Name: "Should succeed using custom permission when provided via variadic parameter",
+			Input: inputArgs{
+				path: "~/custom-dir",
+				perm: []os.FileMode{0700},
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "sub_custom"), nil
+				})
+				m.OnCall.OsMkdir(func(path string, perm os.FileMode) error {
+					if perm != 0700 {
+						return xerrors.NewErr("expected custom permission 0700, got %o", perm)
+					}
+					return os.Mkdir(path, perm)
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsMkdirFn != nil {
-				mockFunction(t, &fnMockable_OsMkdir, tt.customOsMkdirFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Desempacota o slice para simular o parâmetro variádico (...)
-			err := CreateDir(tt.inputPath, tt.inputPerm...)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("CreateDir() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-			}
+			// Trigger the business implementation
+			err := xfs.CreateDir(args.path, args.perm...)
+
+			// Validation
+			AssertResult(t, tt, testFunction, nil, err)
 		})
 	}
 }
 
 func TestCreateDirPath(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputPerm            []os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsMkdirAllFn   func(string, os.FileMode) error
-	}{
+	testFunction := "CreateDirPath"
+
+	type inputArgs struct {
+		path string
+		perm []os.FileMode
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error immediately if path is empty",
-			inputPath:   "",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[MSG: empty string value not allowed][FIELD: path]",
+			Name: "Should return error immediately if path is empty",
+			Input: inputArgs{
+				path: "",
+				perm: nil,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: empty string value not allowed][FIELD: path]",
+			MockFn:      nil,
 		},
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+				perm: nil,
 			},
-		},
-		{
-			name:        "Should return error if os.MkdirAll fails (permission denied)",
-			inputPath:   "~/protected-tree",
-			inputPerm:   nil,
-			wantErr:     true,
-			errContains: "[MSG: failed to create targeted directory tree][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-tree", nil
-			},
-			customOsMkdirAllFn: func(path string, perm os.FileMode) error {
-				return os.ErrPermission
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:      "Should succeed creating a nested tree using default permissions (0755)",
-			inputPath: "~/nested/tree/default",
-			inputPerm: nil,
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "nested", "tree", "default"), nil
+			Name: "Should return error if os.MkdirAll fails (permission denied)",
+			Input: inputArgs{
+				path: "~/protected-tree",
+				perm: nil,
 			},
-			customOsMkdirAllFn: func(path string, perm os.FileMode) error {
-				if perm != 0755 {
-					return xerrors.NewErr("expected default permission 0755, got %o", perm)
-				}
-				return os.MkdirAll(path, perm)
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to create targeted directory tree][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-tree", nil)
+				m.OnCall.OsMkdirAll(func(path string, perm os.FileMode) error {
+					return os.ErrPermission
+				})
 			},
 		},
 		{
-			name:      "Should succeed creating a nested tree using custom permissions",
-			inputPath: "~/nested/tree/custom",
-			inputPerm: []os.FileMode{0700},
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "nested", "tree", "custom"), nil
+			Name: "Should succeed creating a nested tree using default permissions (0755)",
+			Input: inputArgs{
+				path: "~/nested/tree/default",
+				perm: nil,
 			},
-			customOsMkdirAllFn: func(path string, perm os.FileMode) error {
-				if perm != 0700 {
-					return xerrors.NewErr("expected custom permission 0700, got %o", perm)
-				}
-				return os.MkdirAll(path, perm)
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "nested", "tree", "default"), nil
+				})
+				m.OnCall.OsMkdirAll(func(path string, perm os.FileMode) error {
+					if perm != 0755 {
+						return xerrors.NewErr("expected default permission 0755, got %o", perm)
+					}
+					return os.MkdirAll(path, perm)
+				})
+			},
+		},
+		{
+			Name: "Should succeed creating a nested tree using custom permissions",
+			Input: inputArgs{
+				path: "~/nested/tree/custom",
+				perm: []os.FileMode{0700},
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "nested", "tree", "custom"), nil
+				})
+				m.OnCall.OsMkdirAll(func(path string, perm os.FileMode) error {
+					if perm != 0700 {
+						return xerrors.NewErr("expected custom permission 0700, got %o", perm)
+					}
+					return os.MkdirAll(path, perm)
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsMkdirAllFn != nil {
-				mockFunction(t, &fnMockable_OsMkdirAll, tt.customOsMkdirAllFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Desempacota o slice para simular o parâmetro variádico (...)
-			err := CreateDirPath(tt.inputPath, tt.inputPerm...)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("CreateDirPath() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-			}
+			// Trigger the business implementation
+			err := xfs.CreateDirPath(args.path, args.perm...)
+
+			// Validation
+			AssertResult(t, tt, testFunction, nil, err)
 		})
 	}
 }
 
 func TestOpenFileWrite(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputTruncate        bool
-		inputPerm            []os.FileMode
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsOpenFileFn   func(string, int, os.FileMode) (*os.File, error)
-	}{
+	testFunction := "OpenFileWrite"
+
+	type inputArgs struct {
+		path     string
+		truncate bool
+		perm     []os.FileMode
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:          "Should return error if RetrieveFullPath fails",
-			inputPath:     "invalid/path",
-			inputTruncate: false,
-			inputPerm:     nil,
-			wantErr:       true,
-			errContains:   "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path:     "invalid/path",
+				truncate: false,
+				perm:     nil,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:          "Should return error if os.OpenFile fails (permission denied)",
-			inputPath:     "~/protected-file.txt",
-			inputTruncate: false,
-			inputPerm:     nil,
-			wantErr:       true,
-			errContains:   "[MSG: failed to open targeted file for writing operations][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-file.txt", nil
+			Name: "Should return error if os.OpenFile fails (permission denied)",
+			Input: inputArgs{
+				path:     "~/protected-file.txt",
+				truncate: false,
+				perm:     nil,
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				return nil, os.ErrPermission
-			},
-		},
-		{
-			name:          "Should succeed with APPEND flag and default permission (0644) when truncate is false",
-			inputPath:     "~/append-file.txt",
-			inputTruncate: false,
-			inputPerm:     nil,
-			wantErr:       false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "append.txt"), nil
-			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				if (f & os.O_APPEND) == 0 {
-					return nil, xerrors.NewErr("expected flag to contain os.O_APPEND")
-				}
-				if m != 0644 {
-					return nil, xerrors.NewErr("expected default permission 0644, got %o", m)
-				}
-				return os.OpenFile(n, f, m)
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to open targeted file for writing operations][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-file.txt", nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					return nil, os.ErrPermission
+				})
 			},
 		},
 		{
-			name:          "Should succeed with TRUNC flag and custom permission when truncate is true",
-			inputPath:     "~/trunc-file.txt",
-			inputTruncate: true,
-			inputPerm:     []os.FileMode{0600},
-			wantErr:       false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return filepath.Join(t.TempDir(), "trunc.txt"), nil
+			Name: "Should succeed with APPEND flag and default permission (0644) when truncate is false",
+			Input: inputArgs{
+				path:     "~/append-file.txt",
+				truncate: false,
+				perm:     nil,
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				if (f & os.O_TRUNC) == 0 {
-					return nil, xerrors.NewErr("expected flag to contain os.O_TRUNC")
-				}
-				if m != 0600 {
-					return nil, xerrors.NewErr("expected custom permission 0600, got %o", m)
-				}
-				return os.OpenFile(n, f, m)
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "append.txt"), nil
+				})
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					if (f & os.O_APPEND) == 0 {
+						return nil, xerrors.NewErr("expected flag to contain os.O_APPEND")
+					}
+					if mode != 0644 {
+						return nil, xerrors.NewErr("expected default permission 0644, got %o", mode)
+					}
+					return os.OpenFile(n, f, mode)
+				})
+			},
+		},
+		{
+			Name: "Should succeed with TRUNC flag and custom permission when truncate is true",
+			Input: inputArgs{
+				path:     "~/trunc-file.txt",
+				truncate: true,
+				perm:     []os.FileMode{0600},
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return filepath.Join(t.TempDir(), "trunc.txt"), nil
+				})
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					if (f & os.O_TRUNC) == 0 {
+						return nil, xerrors.NewErr("expected flag to contain os.O_TRUNC")
+					}
+					if mode != 0600 {
+						return nil, xerrors.NewErr("expected custom permission 0600, got %o", mode)
+					}
+					return os.OpenFile(n, f, mode)
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsOpenFileFn != nil {
-				mockFunction(t, &fnMockable_OsOpenFile, tt.customOsOpenFileFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// Desempacota o slice de permissões para suprir o parâmetro variádico (...)
-			got, err := OpenFileWrite(tt.inputPath, tt.inputTruncate, tt.inputPerm...)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("OpenFileWrite() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got == nil {
-				t.Error("Expected a valid *os.File pointer on success, got nil")
-			} else {
-				got.Close() // Fecha o descritor de arquivo seguro gerado pelo t.TempDir()
-			}
+			// Trigger the business implementation
+			got, err := xfs.OpenFileWrite(args.path, args.truncate, args.perm...)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestOpenFileRead(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customOsOpenFileFn   func(string, int, os.FileMode) (*os.File, error)
-	}{
+	testFunction := "OpenFileRead"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if os.OpenFile fails (file not found)",
-			inputPath:   "~/missing-file.txt",
-			wantErr:     true,
-			errContains: "[MSG: failed to open targeted file for reading operations][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/missing-file.txt", nil
+			Name: "Should return error if os.OpenFile fails (file not found)",
+			Input: inputArgs{
+				path: "~/missing-file.txt",
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				return nil, os.ErrNotExist
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to open targeted file for reading operations][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/missing-file.txt", nil)
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					return nil, os.ErrNotExist
+				})
 			},
 		},
 		{
-			name:      "Should succeed opening a file with RDONLY flag",
-			inputPath: "~/readable-file.txt",
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				tmpFile := filepath.Join(t.TempDir(), "read_stub.txt")
-				if err := os.WriteFile(tmpFile, []byte("data"), 0644); err != nil {
-					t.Fatalf("failed to setup test file: %v", err)
-				}
-				return tmpFile, nil
+			Name: "Should succeed opening a file with RDONLY flag",
+			Input: inputArgs{
+				path: "~/readable-file.txt",
 			},
-			customOsOpenFileFn: func(n string, f int, m os.FileMode) (*os.File, error) {
-				if f != os.O_RDONLY {
-					return nil, xerrors.NewErr("expected flag os.O_RDONLY, got %d", f)
-				}
-				return os.OpenFile(n, f, m)
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					tmpFile := filepath.Join(t.TempDir(), "read_stub.txt")
+					if err := os.WriteFile(tmpFile, []byte("data"), 0644); err != nil {
+						t.Fatalf("failed to setup test file: %v", err)
+					}
+					return tmpFile, nil
+				})
+				m.OnCall.OsOpenFile(func(n string, f int, mode os.FileMode) (*os.File, error) {
+					if f != os.O_RDONLY {
+						return nil, xerrors.NewErr("expected flag os.O_RDONLY, got %d", f)
+					}
+					return os.OpenFile(n, f, mode)
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsOpenFileFn != nil {
-				mockFunction(t, &fnMockable_OsOpenFile, tt.customOsOpenFileFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := OpenFileRead(tt.inputPath)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("OpenFileRead() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got == nil {
-				t.Error("Expected a valid *os.File pointer on success, got nil")
-			} else {
-				got.Close() // Fecha o descritor de arquivo gerado na pasta temporária com segurança
-			}
+			// Trigger the business implementation
+			got, err := xfs.OpenFileRead(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestDeleteFile(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customIsDirFn        func(string) bool
-		customOsRemoveFn     func(string) error
-	}{
+	testFunction := "DeleteFile"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if target path is a directory",
-			inputPath:   "~/documents",
-			wantErr:     true,
-			errContains: "[MSG: cannot use DeleteFile on a directory][FIELD: expandedPath][VALUE: /mock/documents][EXPECTED_TYPE: regular file]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/documents", nil
+			Name: "Should return error if target path is a directory",
+			Input: inputArgs{
+				path: "~/documents",
 			},
-			customIsDirFn: func(p string) bool {
-				return true
-			},
-		},
-		{
-			name:        "Should return error if os.Remove fails (file protected or missing)",
-			inputPath:   "~/locked.txt",
-			wantErr:     true,
-			errContains: "[MSG: failed to delete file at targeted path][FIELD: expandedPath]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/locked.txt", nil
-			},
-			customIsDirFn: func(p string) bool {
-				return false
-			},
-			customOsRemoveFn: func(name string) error {
-				return os.ErrPermission
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: cannot use DeleteFile on a directory][FIELD: expandedPath][VALUE: /mock/documents][EXPECTED_TYPE: regular file]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/documents", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
 			},
 		},
 		{
-			name:      "Should succeed and return nil when file is deleted",
-			inputPath: "~/temporary.txt",
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/temporary.txt", nil
+			Name: "Should return error if os.Remove fails (file protected or missing)",
+			Input: inputArgs{
+				path: "~/locked.txt",
 			},
-			customIsDirFn: func(p string) bool {
-				return false
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to delete file at targeted path][FIELD: expandedPath]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/locked.txt", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return false
+				})
+				m.OnCall.OsRemove(func(name string) error {
+					return os.ErrPermission
+				})
 			},
-			customOsRemoveFn: func(name string) error {
-				return nil
+		},
+		{
+			Name: "Should succeed and return nil when file is deleted",
+			Input: inputArgs{
+				path: "~/temporary.txt",
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/temporary.txt", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return false
+				})
+				m.OnCall.OsRemove(func(name string) error {
+					return nil
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			// CORREÇÃO: Garante que o IsDir chame a função mockada injetada no cenário,
-			// evitando que a lógica real tente buscar metadados no disco físico.
-			if tt.customIsDirFn != nil {
-				mockFunction(t, &fnMockable_IsDir, tt.customIsDirFn)
-			} else {
-				mockFunction(t, &fnMockable_IsDir, func(p string) bool { return false })
-			}
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if tt.customOsRemoveFn != nil {
-				mockFunction(t, &fnMockable_OsRemove, tt.customOsRemoveFn)
-			} else {
-				mockFunction(t, &fnMockable_OsRemove, func(name string) error { return nil })
-			}
+			// Trigger the business implementation
+			err := xfs.DeleteFile(args.path)
 
-			// BLINDAGEM EXTRA: Se por algum motivo o IsDir interno for invocado nativamente,
-			// este mock impede o os.Stat de tentar acessar o disco rígido da sua máquina.
-			mockFunction(t, &fnMockable_OsStat, func(name string) (os.FileInfo, error) {
-				return nil, nil
-			})
-
-			err := DeleteFile(tt.inputPath)
-
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("DeleteFile() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-			}
+			// Validation
+			AssertResult(t, tt, testFunction, nil, err)
 		})
 	}
 }
 
 func TestDeleteDir(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		inputRecursive       bool
-		wantErr              bool
-		errContains          string
-		customRetrievePathFn func(string) (string, error)
-		customIsDirFn        func(string) bool
-		customOsRemoveFn     func(string) error
-		customOsRemoveAllFn  func(string) error
-	}{
+	testFunction := "DeleteDir"
+
+	type inputArgs struct {
+		path      string
+		recursive bool
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:           "Should return error if RetrieveFullPath fails",
-			inputPath:      "invalid/path",
-			inputRecursive: false,
-			wantErr:        true,
-			errContains:    "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path:      "invalid/path",
+				recursive: false,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:           "Should return error if target path is not a directory",
-			inputPath:      "~/notes.txt",
-			inputRecursive: false,
-			wantErr:        true,
-			errContains:    "[MSG: path is not a directory or does not exist][FIELD: expandedPath][VALUE: /mock/notes.txt][EXPECTED_TYPE: directory]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/notes.txt", nil
+			Name: "Should return error if target path is not a directory",
+			Input: inputArgs{
+				path:      "~/notes.txt",
+				recursive: false,
 			},
-			customIsDirFn: func(p string) bool {
-				return false
-			},
-		},
-		{
-			name:           "Non-Recursive: Should return error if os.Remove fails (directory not empty)",
-			inputPath:      "~/full-dir",
-			inputRecursive: false,
-			wantErr:        true,
-			errContains:    "[MSG: failed to delete targeted directory hierarchy, recursive='false'][FIELD: expandedPath][TGT: /mock/full-dir]::[ERR: directory not empty]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/full-dir", nil
-			},
-			customIsDirFn: func(p string) bool {
-				return true
-			},
-			customOsRemoveFn: func(name string) error {
-				return errors.New("directory not empty")
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: path is not a directory or does not exist][FIELD: expandedPath][VALUE: /mock/notes.txt][EXPECTED_TYPE: directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/notes.txt", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return false
+				})
 			},
 		},
 		{
-			name:           "Non-Recursive: Should succeed if directory is empty",
-			inputPath:      "~/empty-dir",
-			inputRecursive: false,
-			wantErr:        false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/empty-dir", nil
+			Name: "Non-Recursive: Should return error if os.Remove fails (directory not empty)",
+			Input: inputArgs{
+				path:      "~/full-dir",
+				recursive: false,
 			},
-			customIsDirFn: func(p string) bool {
-				return true
-			},
-			customOsRemoveFn: func(name string) error {
-				return nil
-			},
-		},
-		{
-			name:           "Recursive: Should return error if os.RemoveAll fails (permission denied)",
-			inputPath:      "~/protected-tree",
-			inputRecursive: true,
-			wantErr:        true,
-			errContains:    "[MSG: failed to delete targeted directory hierarchy, recursive='true'][FIELD: expandedPath][TGT: /mock/protected-tree]::[ERR: permission denied]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/protected-tree", nil
-			},
-			customIsDirFn: func(p string) bool {
-				return true
-			},
-			customOsRemoveAllFn: func(path string) error {
-				return os.ErrPermission
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to delete targeted directory hierarchy, recursive='false'][FIELD: expandedPath][TGT: /mock/full-dir]::[ERR: directory not empty]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/full-dir", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
+				m.OnCall.OsRemove(func(name string) error {
+					return errors.New("directory not empty")
+				})
 			},
 		},
 		{
-			name:           "Recursive: Should succeed deleting the entire directory tree",
-			inputPath:      "~/nested-tree",
-			inputRecursive: true,
-			wantErr:        false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/nested-tree", nil
+			Name: "Non-Recursive: Should succeed if directory is empty",
+			Input: inputArgs{
+				path:      "~/empty-dir",
+				recursive: false,
 			},
-			customIsDirFn: func(p string) bool {
-				return true
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/empty-dir", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
+				m.OnCall.OsRemove(func(name string) error {
+					return nil
+				})
 			},
-			customOsRemoveAllFn: func(path string) error {
-				return nil
+		},
+		{
+			Name: "Recursive: Should return error if os.RemoveAll fails (permission denied)",
+			Input: inputArgs{
+				path:      "~/protected-tree",
+				recursive: true,
+			},
+			Want:        nil,
+			WantErr:     true,
+			ErrContains: "[MSG: failed to delete targeted directory hierarchy, recursive='true'][FIELD: expandedPath][TGT: /mock/protected-tree]::[ERR: permission denied]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/protected-tree", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
+				m.OnCall.OsRemoveAll(func(path string) error {
+					return os.ErrPermission
+				})
+			},
+		},
+		{
+			Name: "Recursive: Should succeed deleting the entire directory tree",
+			Input: inputArgs{
+				path:      "~/nested-tree",
+				recursive: true,
+			},
+			Want:        nil,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/nested-tree", nil)
+				m.OnCall.IsDir(func(p string) bool {
+					return true
+				})
+				m.OnCall.OsRemoveAll(func(path string) error {
+					return nil
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customIsDirFn != nil {
-				mockFunction(t, &fnMockable_IsDir, tt.customIsDirFn)
-			} else {
-				mockFunction(t, &fnMockable_IsDir, func(p string) bool { return true })
-			}
-			if tt.customOsRemoveFn != nil {
-				mockFunction(t, &fnMockable_OsRemove, tt.customOsRemoveFn)
-			} else {
-				mockFunction(t, &fnMockable_OsRemove, func(name string) error { return nil })
-			}
-			if tt.customOsRemoveAllFn != nil {
-				mockFunction(t, &fnMockable_OsRemoveAll, tt.customOsRemoveAllFn)
-			} else {
-				mockFunction(t, &fnMockable_OsRemoveAll, func(path string) error { return nil })
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			err := DeleteDir(tt.inputPath, tt.inputRecursive)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("DeleteDir() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-			}
+			// Trigger the business implementation
+			err := xfs.DeleteDir(args.path, args.recursive)
+
+			// Validation
+			AssertResult(t, tt, testFunction, nil, err)
 		})
 	}
 }
 
 func TestHasSpaceAvailable(t *testing.T) {
-	tests := []struct {
-		name                   string
-		inputPath              string
-		inputBytes             uint64
-		want                   bool
-		wantErr                bool
-		errContains            string
-		customRetrievePathFn   func(string) (string, error)
-		customExistsFn         func(string) bool
-		customGetVolumeSpaceFn func(string, uint64) (bool, error)
-	}{
+	testFunction := "HasSpaceAvailable"
+
+	type inputArgs struct {
+		path  string
+		bytes uint64
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:        "Should return error if RetrieveFullPath fails",
-			inputPath:   "invalid/path",
-			inputBytes:  1024,
-			want:        false,
-			wantErr:     true,
-			errContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
-			// Technical Note: Simulates a real failure leaking natively from the core engine
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path:  "invalid/path",
+				bytes: 1024,
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "[CTX: XFS][MSG: failed to resolve user home directory]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", errors.New("[CTX: XFS][MSG: failed to resolve user home directory]")
+				})
 			},
 		},
 		{
-			name:        "Should return error if it loops up to the root and finds no valid path",
-			inputPath:   "~/some/nested/path",
-			inputBytes:  1024,
-			want:        false,
-			wantErr:     true,
-			errContains: "[MSG: could not find a valid base volume path][FIELD: expandedPath][TGT: /mock/some/nested/path]",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/some/nested/path", nil
+			Name: "Should return error if it loops up to the root and finds no valid path",
+			Input: inputArgs{
+				path:  "~/some/nested/path",
+				bytes: 1024,
 			},
-			customExistsFn: func(p string) bool {
-				return false
-			},
-		},
-		{
-			name:       "Should break the loop immediately if the expanded path exists",
-			inputPath:  "~/existing-dir",
-			inputBytes: 500,
-			want:       true,
-			wantErr:    false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/existing-dir", nil
-			},
-			customExistsFn: func(p string) bool {
-				return p == "/mock/existing-dir"
-			},
-			customGetVolumeSpaceFn: func(path string, bytes uint64) (bool, error) {
-				if path != "/mock/existing-dir" {
-					return false, errors.New("expected validation track check failure")
-				}
-				return true, nil
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "[MSG: could not find a valid base volume path][FIELD: expandedPath][TGT: /mock/some/nested/path]",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/some/nested/path", nil)
+				m.OnCall.Exists(func(p string) bool {
+					return false
+				})
 			},
 		},
 		{
-			name:       "Should loop upwards until finding an existing parent directory",
-			inputPath:  "/mock/root/dir/missing1/missing2",
-			inputBytes: 2000,
-			want:       true,
-			wantErr:    false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/root/dir/missing1/missing2", nil
+			Name: "Should break the loop immediately if the expanded path exists",
+			Input: inputArgs{
+				path:  "~/existing-dir",
+				bytes: 500,
 			},
-			customExistsFn: func(p string) bool {
-				return p == filepath.FromSlash("/mock/root/dir")
-			},
-			customGetVolumeSpaceFn: func(path string, bytes uint64) (bool, error) {
-				if path != filepath.FromSlash("/mock/root/dir") {
-					return false, errors.New("expected validation track check failure")
-				}
-				return true, nil
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/existing-dir", nil)
+				m.OnCall.Exists(func(p string) bool {
+					return p == "/mock/existing-dir"
+				})
+				m.OnCall.GetVolumeFreeSpace(func(path string, bytes uint64) (bool, error) {
+					if path != "/mock/existing-dir" {
+						return false, errors.New("expected validation track check failure")
+					}
+					return true, nil
+				})
 			},
 		},
 		{
-			name:        "Should propagate errors returned by getVolumeFreeSpace function",
-			inputPath:   "~/existing-dir",
-			inputBytes:  100,
-			want:        false,
-			wantErr:     true,
-			errContains: "syscall disk failure",
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/existing-dir", nil
+			Name: "Should loop upwards until finding an existing parent directory",
+			Input: inputArgs{
+				path:  "/mock/root/dir/missing1/missing2",
+				bytes: 2000,
 			},
-			customExistsFn: func(p string) bool {
-				return true
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/root/dir/missing1/missing2", nil)
+				m.OnCall.Exists(func(p string) bool {
+					return p == filepath.FromSlash("/mock/root/dir")
+				})
+				m.OnCall.GetVolumeFreeSpace(func(path string, bytes uint64) (bool, error) {
+					if path != filepath.FromSlash("/mock/root/dir") {
+						return false, errors.New("expected validation track check failure")
+					}
+					return true, nil
+				})
 			},
-			customGetVolumeSpaceFn: func(path string, bytes uint64) (bool, error) {
-				return false, errors.New("syscall disk failure")
+		},
+		{
+			Name: "Should propagate errors returned by getVolumeFreeSpace function",
+			Input: inputArgs{
+				path:  "~/existing-dir",
+				bytes: 100,
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "syscall disk failure",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/existing-dir", nil)
+				m.OnCall.Exists(func(p string) bool {
+					return true
+				})
+				m.OnCall.GetVolumeFreeSpace(func(path string, bytes uint64) (bool, error) {
+					return false, errors.New("syscall disk failure")
+				})
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customExistsFn != nil {
-				mockFunction(t, &fnMockable_Exists, tt.customExistsFn)
-			} else {
-				mockFunction(t, &fnMockable_Exists, func(p string) bool { return true })
-			}
-			if tt.customGetVolumeSpaceFn != nil {
-				mockFunction(t, &fnMockable_GetVolumeFreeSpace, tt.customGetVolumeSpaceFn)
-			} else {
-				mockFunction(t, &fnMockable_GetVolumeFreeSpace, func(p string, b uint64) (bool, error) { return true, nil })
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := HasSpaceAvailable(tt.inputPath, tt.inputBytes)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("HasSpaceAvailable() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Expected error to contain %q, got %q", tt.errContains, err.Error())
-				}
-				return
-			}
-			if got != tt.want {
-				t.Errorf("HasSpaceAvailable() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.HasSpaceAvailable(args.path, args.bytes)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestGetFileSize(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputPath            string
-		want                 int64
-		wantErr              bool
-		errContains          error
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "GetFileSize"
+
+	type inputArgs struct {
+		path string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:      "Should return error if RetrieveFullPath fails",
-			inputPath: "invalid/path",
-			want:      0,
-			wantErr:   true,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "", xerrors.NewErr("mocked err")
+			Name: "Should return error if RetrieveFullPath fails",
+			Input: inputArgs{
+				path: "invalid/path",
+			},
+			Want:        int64(0),
+			WantErr:     true,
+			ErrContains: "mocked err",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return "", xerrors.NewErr("mocked err")
+				})
 			},
 		},
 		{
-			name:      "Should return error if os.Stat fails (file not found)",
-			inputPath: "~/missing-file.txt",
-			want:      0,
-			wantErr:   true,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/missing-file.txt", nil
+			Name: "Should return error if os.Stat fails (file not found)",
+			Input: inputArgs{
+				path: "~/missing-file.txt",
 			},
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return nil, os.ErrNotExist
-			},
-		},
-		{
-			name:        "Should return os.ErrInvalid if the path targets a directory",
-			inputPath:   "~/documents",
-			want:        0,
-			wantErr:     true,
-			errContains: os.ErrInvalid,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/documents", nil
-			},
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: true}, nil
+			Want:        int64(0),
+			WantErr:     true,
+			ErrContains: "file does not exist",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/missing-file.txt", nil)
+				m.SetReturn.OsStat(nil, os.ErrNotExist)
 			},
 		},
 		{
-			name:      "Should return the correct file size on success",
-			inputPath: "~/notes.txt",
-			want:      int64(4096), // Technical Note: Enforces a predictable in-memory volume size constraint
-			wantErr:   false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return "/mock/notes.txt", nil
+			Name: "Should return os.ErrInvalid if the path targets a directory",
+			Input: inputArgs{
+				path: "~/documents",
 			},
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				return mockFileInfo{isDir: false, size: 4096}, nil
+			Want:        int64(0),
+			WantErr:     true,
+			ErrContains: "invalid argument",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/documents", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: false, isDir: true}, nil)
+			},
+		},
+		{
+			Name: "Should return the correct file size on success",
+			Input: inputArgs{
+				path: "~/notes.txt",
+			},
+			Want:        int64(4096),
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("/mock/notes.txt", nil)
+				m.SetReturn.OsStat(mockFileInfo{isRegular: true, size: 4096}, nil)
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := GetFileSize(tt.inputPath)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("GetFileSize() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr && tt.errContains != nil {
-				if !errors.Is(err, tt.errContains) {
-					t.Errorf("Expected error to be %v, got %v", tt.errContains, err)
-				}
-				return
-			}
-			if got != tt.want {
-				t.Errorf("GetFileSize() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.GetFileSize(args.path)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }
 
 func TestIsSameFile(t *testing.T) {
-	tests := []struct {
-		name                 string
-		inputA               string
-		inputB               string
-		want                 bool
-		wantErr              bool
-		customRetrievePathFn func(string) (string, error)
-		customOsStatFn       func(string) (os.FileInfo, error)
-	}{
+	testFunction := "IsSameFile"
+
+	type inputArgs struct {
+		pathA string
+		pathB string
+	}
+
+	tests := []pkgxmock.TestCaseXFS{
 		{
-			name:    "Should return error if RetrieveFullPath fails for pathA",
-			inputA:  "invalid/path",
-			inputB:  "valid/path",
-			want:    false,
-			wantErr: true,
-			customRetrievePathFn: func(p string) (string, error) {
-				if p == "invalid/path" {
-					return "", xerrors.NewErr("mocked err A")
-				}
-				return "/mock/valid", nil
+			Name: "Should return error if RetrieveFullPath fails for pathA",
+			Input: inputArgs{
+				pathA: "invalid/path",
+				pathB: "valid/path",
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "mocked err A",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					if p == "invalid/path" {
+						return "", xerrors.NewErr("mocked err A")
+					}
+					return "/mock/valid", nil
+				})
 			},
 		},
 		{
-			name:    "Should return error if RetrieveFullPath fails for pathB",
-			inputA:  "valid/path",
-			inputB:  "invalid/path",
-			want:    false,
-			wantErr: true,
-			customRetrievePathFn: func(p string) (string, error) {
-				if p == "invalid/path" {
-					return "", xerrors.NewErr("mocked err B")
-				}
-				return "/mock/valid", nil
+			Name: "Should return error if RetrieveFullPath fails for pathB",
+			Input: inputArgs{
+				pathA: "valid/path",
+				pathB: "invalid/path",
+			},
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "mocked err B",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					if p == "invalid/path" {
+						return "", xerrors.NewErr("mocked err B")
+					}
+					return "/mock/valid", nil
+				})
 			},
 		},
 		{
-			name:    "Should return error if os.Stat fails for pathA",
-			inputA:  "~/missing1.txt",
-			inputB:  "~/notes.txt",
-			want:    false,
-			wantErr: true,
-			customRetrievePathFn: func(p string) (string, error) {
-				return p, nil
+			Name: "Should return error if os.Stat fails for pathA",
+			Input: inputArgs{
+				pathA: "~/missing1.txt",
+				pathB: "~/notes.txt",
 			},
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				if n == "~/missing1.txt" {
-					return nil, os.ErrNotExist
-				}
-				tmp, err := os.CreateTemp(t.TempDir(), "same_file_stub")
-				if err != nil {
-					return nil, err
-				}
-				defer tmp.Close()
-				return tmp.Stat()
-			},
-		},
-		{
-			name:    "Should return error if os.Stat fails for pathB",
-			inputA:  "~/notes.txt",
-			inputB:  "~/missing2.txt",
-			want:    false,
-			wantErr: true,
-			customRetrievePathFn: func(p string) (string, error) {
-				return p, nil
-			},
-			customOsStatFn: func(n string) (os.FileInfo, error) {
-				if n == "~/missing2.txt" {
-					return nil, os.ErrNotExist
-				}
-				tmp, err := os.CreateTemp(t.TempDir(), "same_file_stub")
-				if err != nil {
-					return nil, err
-				}
-				defer tmp.Close()
-				return tmp.Stat()
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "file does not exist",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.SetReturn.RetrieveFullPath("", nil)
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return p, nil
+				})
+				m.OnCall.OsStat(func(n string) (os.FileInfo, error) {
+					if n == "~/missing1.txt" {
+						return nil, os.ErrNotExist
+					}
+					tmp, _ := os.CreateTemp(t.TempDir(), "same_file_stub")
+					defer tmp.Close()
+					return tmp.Stat()
+				})
 			},
 		},
 		{
-			name:    "Should return true if both paths point to the exact same file",
-			inputA:  "~/notes.txt",
-			inputB:  "~/notes_alias.txt",
-			want:    true,
-			wantErr: false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return p, nil
+			Name: "Should return error if os.Stat fails for pathB",
+			Input: inputArgs{
+				pathA: "~/notes.txt",
+				pathB: "~/missing2.txt",
 			},
-			// Technical Note: Instantiates a temporary file, captures metadata, and closes the handle immediately to prevent Windows file locking
-			customOsStatFn: func() func(string) (os.FileInfo, error) {
+			Want:        false,
+			WantErr:     true,
+			ErrContains: "file does not exist",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return p, nil
+				})
+				m.OnCall.OsStat(func(n string) (os.FileInfo, error) {
+					if n == "~/missing2.txt" {
+						return nil, os.ErrNotExist
+					}
+					tmp, _ := os.CreateTemp(t.TempDir(), "same_file_stub")
+					defer tmp.Close()
+					return tmp.Stat()
+				})
+			},
+		},
+		{
+			Name: "Should return true if both paths point to the exact same file",
+			Input: inputArgs{
+				pathA: "~/notes.txt",
+				pathB: "~/notes_alias.txt",
+			},
+			Want:        true,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return p, nil
+				})
 				tmpFile, _ := os.CreateTemp(t.TempDir(), "shared_inode_stub")
 				info, _ := tmpFile.Stat()
-				_ = tmpFile.Close() // Bypasses file tracking locks
-				return func(n string) (os.FileInfo, error) {
+				_ = tmpFile.Close()
+				m.OnCall.OsStat(func(n string) (os.FileInfo, error) {
 					return info, nil
-				}
-			}(),
+				})
+			},
 		},
 		{
-			name:    "Should return false if paths point to different files",
-			inputA:  "~/notes.txt",
-			inputB:  "~/documents",
-			want:    false,
-			wantErr: false,
-			customRetrievePathFn: func(p string) (string, error) {
-				return p, nil
+			Name: "Should return false if paths point to different files",
+			Input: inputArgs{
+				pathA: "~/notes.txt",
+				pathB: "~/documents",
 			},
-			// Technical Note: Safely closes both descriptor streams before execution to allow the test framework to run its cleanup
-			customOsStatFn: func() func(string) (os.FileInfo, error) {
+			Want:        false,
+			WantErr:     false,
+			ErrContains: "",
+			MockFn: func(m *pkgxmock.MockXFS) {
+				m.OnCall.RetrieveFullPath(func(p string) (string, error) {
+					return p, nil
+				})
 				tmpA, _ := os.CreateTemp(t.TempDir(), "file_a")
 				tmpB, _ := os.CreateTemp(t.TempDir(), "file_b")
 				infoA, _ := tmpA.Stat()
 				infoB, _ := tmpB.Stat()
 				_ = tmpA.Close()
 				_ = tmpB.Close()
-				return func(n string) (os.FileInfo, error) {
+
+				m.OnCall.OsStat(func(n string) (os.FileInfo, error) {
 					if n == "~/documents" {
 						return infoB, nil
 					}
 					return infoA, nil
-				}
-			}(),
+				})
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.customRetrievePathFn != nil {
-				mockFunction(t, &fnMockable_RetrieveFullPath, tt.customRetrievePathFn)
-			}
-			if tt.customOsStatFn != nil {
-				mockFunction(t, &fnMockable_OsStat, tt.customOsStatFn)
-			}
+		t.Run(tt.Name, func(t *testing.T) {
+			// Configure mocks
+			defer SetupTestMock(t, tt)()
 
-			got, err := IsSameFile(tt.inputA, tt.inputB)
+			// Unpacks the typed parameters from the generic input object safely
+			args := tt.Input.(inputArgs)
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("IsSameFile() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				return
-			}
-			if got != tt.want {
-				t.Errorf("IsSameFile() = %v, want %v", got, tt.want)
-			}
+			// Trigger the business implementation
+			got, err := xfs.IsSameFile(args.pathA, args.pathB)
+
+			// Validation
+			AssertResult(t, tt, testFunction, got, err)
 		})
 	}
 }

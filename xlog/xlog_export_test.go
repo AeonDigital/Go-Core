@@ -10,6 +10,7 @@ var (
 	FnMockable_IsDir               = &fnMockable_IsDir
 	FnMockable_CreateDirPath       = &fnMockable_CreateDirPath
 	FnMockable_OpenFileWrite       = &fnMockable_OpenFileWrite
+	FnMockable_GetUserLogDir        = &fnMockable_GetUserLogDir
 )
 
 // MockFunction substitui temporariamente uma função por um mock de teste
