@@ -10,9 +10,6 @@ import (
 	"github.com/AeonDigital/Go-Core/xstrings"
 )
 
-const XERR_NONE xerrors.ErrorCode = ""
-const XERR_PKGCTX xerrors.ErrorCode = "ERR_XCONFIG"
-
 // Options centralizes all possible configuration parameters required by
 // the various configuration providers (e.g., Environment, DotEnv, JSON).
 type Options struct {
