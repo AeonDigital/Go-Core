@@ -13,15 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// SQLiteConfig aggregates dedicated attributes and behavior modifiers needed to shape SQLite behavior.
-type SQLiteConfig struct {
-	Mode        string            `json:"mode"`
-	Dir         string            `json:"dir"`
-	FileName    string            `json:"fileName"`
-	QueryString string            `json:"querystring"`
-	Pragma      map[string]string `json:"pragma"`
-}
-
 // DBConfig manages database driver options, connection pool life cycles, and engine-specific options.
 type DBConfig struct {
 	Driver                string        `json:"driver"`

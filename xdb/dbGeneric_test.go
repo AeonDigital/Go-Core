@@ -149,9 +149,9 @@ func TestDBGeneric_Transaction_Lifecycle(t *testing.T) {
 
 		// 3. Executamos o Insert através do repositório transacional
 		errCode := txRepo.Insert(ctx, user)
-		if errCode != xdb.ErrNone {
+		if errCode != xdb.XERR_NONE {
 			tx.Rollback()
-			t.Fatalf("expected ErrNone, got %s", errCode)
+			t.Fatalf("expected XERR_NONE, got %s", errCode)
 		}
 
 		// 4. Cancelamos a transação explicitamente (Rollback)
@@ -162,7 +162,7 @@ func TestDBGeneric_Transaction_Lifecycle(t *testing.T) {
 		// 5. PROVA DE ISOLAMENTO: Buscamos o ID no repositório global (fora da transação)
 		// Como houve Rollback, o registro DEVE ter sumido e retornado RecordNotFound (E0020)
 		_, fetchErr := globalRepo.GetByID(ctx, user.ID)
-		if fetchErr != xdb.ErrRepoGetByIDRecordNotFound {
+		if fetchErr != xdb.XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND {
 			t.Errorf("expected record to be rolled back, but found code: %s", fetchErr)
 		}
 	})
@@ -199,8 +199,8 @@ func TestQueryRaw(t *testing.T) {
 		}
 
 		result, errCode := xdb.QueryRaw(ctx, db, cq)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 		if len(result) != 1 {
 			t.Errorf("expected 1 record, got %d", len(result))
@@ -220,8 +220,8 @@ func TestQueryRaw(t *testing.T) {
 		}
 
 		_, errCode := xdb.QueryRaw(ctx, deadDb, cq)
-		if errCode != xdb.ErrRepoQueryRawExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoQueryRawExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_QUERY_RAW_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_QUERY_RAW_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -237,8 +237,8 @@ func TestQueryRaw(t *testing.T) {
 		}
 
 		_, errCode := xdb.QueryRaw(ctx, db, cq)
-		if errCode != xdb.ErrRepoQueryRawScanFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoQueryRawScanFailed, errCode)
+		if errCode != xdb.XERR_REPO_QUERY_RAW_SCAN_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_QUERY_RAW_SCAN_FAILED, errCode)
 		}
 	})
 
@@ -253,8 +253,8 @@ func TestQueryRaw(t *testing.T) {
 		}
 
 		_, errCode := xdb.QueryRaw(ctx, fakeDb, cq)
-		if errCode != xdb.ErrRepoGetAllIterationFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllIterationFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_ITERATION_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_ITERATION_FAILED, errCode)
 		}
 	})
 
@@ -274,8 +274,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 
 		if user.ID != 1 {
@@ -302,8 +302,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 
 		if user.Name != "Trim Me" {
@@ -319,8 +319,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrRepoInsertHasNumericalPK {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoInsertHasNumericalPK, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_HAS_NUMERICAL_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_HAS_NUMERICAL_PK, errCode)
 		}
 	})
 
@@ -333,8 +333,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrRepoInsertHasStringPK {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoInsertHasStringPK, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_HAS_STRING_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_HAS_STRING_PK, errCode)
 		}
 	})
 
@@ -347,8 +347,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrRepoInsertNaturalPKEmpty {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoInsertNaturalPKEmpty, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_NATURAL_PK_EMPTY {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_NATURAL_PK_EMPTY, errCode)
 		}
 	})
 
@@ -361,8 +361,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrRepoInsertNaturalPKNil {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoInsertNaturalPKNil, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_NATURAL_PK_NIL {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_NATURAL_PK_NIL, errCode)
 		}
 	})
 
@@ -374,8 +374,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Fatalf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Fatalf("expected XERR_NONE, got %s", errCode)
 		}
 
 		if user.UUID != "GENERATED-UUID-123" {
@@ -394,8 +394,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := deadRepo.Insert(ctx, user)
-		if errCode != xdb.ErrRepoInsertExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoInsertExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -407,8 +407,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 
 		if user.ID != 2 {
@@ -433,8 +433,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		existingUser.Name = "Updated Name"
 
 		errCode := repo.Update(ctx, existingUser)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 
 		fetched, _ := repo.GetByID(ctx, existingUser.ID)
@@ -451,8 +451,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repo.Update(ctx, invalidUser)
-		if errCode != xdb.ErrRepoUpdateInvalidNumericalPK {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateInvalidNumericalPK, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_INVALID_NUMERICAL_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_INVALID_NUMERICAL_PK, errCode)
 		}
 	})
 
@@ -464,8 +464,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repo.Update(ctx, invalidUser)
-		if errCode != xdb.ErrRepoUpdateEmptyStringPK {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateEmptyStringPK, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_EMPTY_STRING_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_EMPTY_STRING_PK, errCode)
 		}
 	})
 
@@ -476,8 +476,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repo.Update(ctx, invalidUser)
-		if errCode != xdb.ErrRepoUpdatePKNil {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdatePKNil, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_PK_NIL {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_PK_NIL, errCode)
 		}
 	})
 
@@ -489,8 +489,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		invalidUser.Name = "FORCE_UNKNOWN_PK_TYPE"
 
 		errCode := repo.Update(ctx, invalidUser)
-		if errCode != xdb.ErrRepoUpdateUnknownPKType {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateUnknownPKType, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_UNKNOWN_PK_TYPE {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_UNKNOWN_PK_TYPE, errCode)
 		}
 	})
 
@@ -513,8 +513,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repo.Update(ctx, user)
-		if errCode != xdb.ErrRepoUpdateNoColumnsDefined {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateNoColumnsDefined, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_NO_COLUMNS_DEFINED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_NO_COLUMNS_DEFINED, errCode)
 		}
 	})
 
@@ -530,8 +530,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := deadRepo.Update(ctx, user)
-		if errCode != xdb.ErrRepoUpdateExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -543,8 +543,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repo.Update(ctx, notFoundUser)
-		if errCode != xdb.ErrRepoUpdateRecordNotFound {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateRecordNotFound, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_RECORD_NOT_FOUND {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_RECORD_NOT_FOUND, errCode)
 		}
 	})
 
@@ -559,8 +559,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		defer repo.SetIdempotentUpdate(false)
 
 		errCode := repo.Update(ctx, notFoundUser)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone due to idempotency, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE due to idempotency, got %s", errCode)
 		}
 	})
 
@@ -574,8 +574,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		forcedCtx := xdb.ContextWithForcedIdempotency(ctx)
 
 		errCode := repo.Update(forcedCtx, notFoundUser)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone due to forced context, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE due to forced context, got %s", errCode)
 		}
 	})
 
@@ -592,8 +592,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		prohibitedCtx := xdb.ContextWithProhibitedIdempotency(ctx)
 
 		errCode := repo.Update(prohibitedCtx, notFoundUser)
-		if errCode != xdb.ErrRepoUpdateRecordNotFound {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateRecordNotFound, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_RECORD_NOT_FOUND {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_RECORD_NOT_FOUND, errCode)
 		}
 	})
 
@@ -609,8 +609,8 @@ func TestDBGeneric_Update(t *testing.T) {
 		}
 
 		errCode := repoRowsFail.Update(ctx, user)
-		if errCode != xdb.ErrRepoUpdateVerifyRowsFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoUpdateVerifyRowsFailed, errCode)
+		if errCode != xdb.XERR_REPO_UPDATE_VERIFY_ROWS_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_UPDATE_VERIFY_ROWS_FAILED, errCode)
 		}
 	})
 }
@@ -627,12 +627,12 @@ func TestDBGeneric_Delete(t *testing.T) {
 		_ = repo.Insert(ctx, user)
 
 		errCode := repo.Delete(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 
 		_, fetchErr := repo.GetByID(ctx, user.ID)
-		if fetchErr != xdb.ErrRepoGetByIDRecordNotFound {
+		if fetchErr != xdb.XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND {
 			t.Errorf("expected record to be gone, got %s", fetchErr)
 		}
 	})
@@ -645,8 +645,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		user := &MockUser{ID: 1}
 
 		errCode := deadRepo.Delete(ctx, user)
-		if errCode != xdb.ErrRepoDeleteExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoDeleteExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_DELETE_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_DELETE_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -657,8 +657,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		user := &MockUser{ID: 1}
 
 		errCode := repoRowsFail.Delete(ctx, user)
-		if errCode != xdb.ErrRepoDeleteVerifyRowsFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoDeleteVerifyRowsFailed, errCode)
+		if errCode != xdb.XERR_REPO_DELETE_VERIFY_ROWS_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_DELETE_VERIFY_ROWS_FAILED, errCode)
 		}
 	})
 
@@ -666,8 +666,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		user := &MockUser{ID: 999}
 
 		errCode := repo.Delete(ctx, user)
-		if errCode != xdb.ErrRepoDeleteRecordNotFound {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoDeleteRecordNotFound, errCode)
+		if errCode != xdb.XERR_REPO_DELETE_RECORD_NOT_FOUND {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_DELETE_RECORD_NOT_FOUND, errCode)
 		}
 	})
 
@@ -678,8 +678,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		defer repo.SetIdempotentDelete(false)
 
 		errCode := repo.Delete(ctx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone due to idempotency, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE due to idempotency, got %s", errCode)
 		}
 	})
 
@@ -689,8 +689,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		forcedCtx := xdb.ContextWithForcedIdempotency(ctx)
 
 		errCode := repo.Delete(forcedCtx, user)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone due to forced context, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE due to forced context, got %s", errCode)
 		}
 	})
 
@@ -703,8 +703,8 @@ func TestDBGeneric_Delete(t *testing.T) {
 		prohibitedCtx := xdb.ContextWithProhibitedIdempotency(ctx)
 
 		errCode := repo.Delete(prohibitedCtx, user)
-		if errCode != xdb.ErrRepoDeleteRecordNotFound {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoDeleteRecordNotFound, errCode)
+		if errCode != xdb.XERR_REPO_DELETE_RECORD_NOT_FOUND {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_DELETE_RECORD_NOT_FOUND, errCode)
 		}
 	})
 }
@@ -721,8 +721,8 @@ func TestDBGeneric_GetByID(t *testing.T) {
 
 	t.Run("Success get record by id", func(t *testing.T) {
 		fetched, errCode := repo.GetByID(ctx, user.ID)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 		if fetched == nil || fetched.Name != "Get Tester" {
 			t.Errorf("failed to fetch correct user data")
@@ -731,8 +731,8 @@ func TestDBGeneric_GetByID(t *testing.T) {
 
 	t.Run("Fail when record is not found", func(t *testing.T) {
 		fetched, errCode := repo.GetByID(ctx, 9999)
-		if errCode != xdb.ErrRepoGetByIDRecordNotFound {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetByIDRecordNotFound, errCode)
+		if errCode != xdb.XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND, errCode)
 		}
 		if fetched != nil {
 			t.Errorf("expected nil instance on failure")
@@ -745,8 +745,8 @@ func TestDBGeneric_GetByID(t *testing.T) {
 		deadRepo := xdb.NewDBGeneric[MockUser](deadDb)
 
 		_, errCode := deadRepo.GetByID(ctx, 1)
-		if errCode != xdb.ErrRepoGetByIDExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetByIDExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_BY_ID_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_BY_ID_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -761,8 +761,8 @@ func TestDBGeneric_GetByID(t *testing.T) {
 		}
 
 		fetched, errCode := repoScanFail.GetByID(ctx, 1)
-		if errCode != xdb.ErrRepoGetByIDScanFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetByIDScanFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_BY_ID_SCAN_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_BY_ID_SCAN_FAILED, errCode)
 		}
 		if fetched != nil {
 			t.Errorf("expected nil instance on scan failure")
@@ -783,8 +783,8 @@ func TestDBGeneric_GetAll(t *testing.T) {
 
 	t.Run("Success get all records", func(t *testing.T) {
 		list, errCode := repo.GetAll(ctx)
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 		if len(list) != 2 {
 			t.Errorf("expected 2 records, got %d", len(list))
@@ -797,8 +797,8 @@ func TestDBGeneric_GetAll(t *testing.T) {
 		deadRepo := xdb.NewDBGeneric[MockUser](deadDb)
 
 		_, errCode := deadRepo.GetAll(ctx)
-		if errCode != xdb.ErrRepoGetAllExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -810,8 +810,8 @@ func TestDBGeneric_GetAll(t *testing.T) {
 		_, _ = dbScanFail.Exec("INSERT INTO mock_users (id, uuid, name, email) VALUES (?, ?, ?, ?);", 1, nil, "FORCE_SCAN_FAILURE", "fail@example.com")
 
 		_, errCode := repoScanFail.GetAll(ctx)
-		if errCode != xdb.ErrRepoGetAllScanFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllScanFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_SCAN_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_SCAN_FAILED, errCode)
 		}
 	})
 
@@ -821,8 +821,8 @@ func TestDBGeneric_GetAll(t *testing.T) {
 		repoRowsFail.SetExecutorForTest(mockExecutorGetAllIterError{})
 
 		_, errCode := repoRowsFail.GetAll(ctx)
-		if errCode != xdb.ErrRepoGetAllIterationFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllIterationFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_ITERATION_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_ITERATION_FAILED, errCode)
 		}
 	})
 }
@@ -839,8 +839,8 @@ func TestDBGeneric_GetByField(t *testing.T) {
 
 	t.Run("Success get records by field", func(t *testing.T) {
 		list, errCode := repo.GetByField(ctx, "email", "target@example.com")
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 		if len(list) != 1 {
 			t.Errorf("expected 1 record, got %d", len(list))
@@ -856,8 +856,8 @@ func TestDBGeneric_GetByField(t *testing.T) {
 		deadRepo := xdb.NewDBGeneric[MockUser](deadDb)
 
 		_, errCode := deadRepo.GetByField(ctx, "email", "target@example.com")
-		if errCode != xdb.ErrRepoGetByFieldExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetByFieldExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_BY_FIELD_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_BY_FIELD_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -869,8 +869,8 @@ func TestDBGeneric_GetByField(t *testing.T) {
 		_, _ = dbScanFail.Exec("INSERT INTO mock_users (id, uuid, name, email) VALUES (?, ?, ?, ?);", 1, nil, "FORCE_SCAN_FAILURE", "fail@example.com")
 
 		_, errCode := repoScanFail.GetByField(ctx, "email", "fail@example.com")
-		if errCode != xdb.ErrRepoGetByFieldScanFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetByFieldScanFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_BY_FIELD_SCAN_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_BY_FIELD_SCAN_FAILED, errCode)
 		}
 	})
 
@@ -880,8 +880,8 @@ func TestDBGeneric_GetByField(t *testing.T) {
 		repoRowsFail.SetExecutorForTest(mockExecutorRowsError{})
 
 		_, errCode := repoRowsFail.GetByField(ctx, "email", "FAIL_GETBYFIELD")
-		if errCode != xdb.ErrRepoGetAllIterationFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllIterationFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_ITERATION_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_ITERATION_FAILED, errCode)
 		}
 	})
 }
@@ -898,8 +898,8 @@ func TestDBGeneric_GetWhere(t *testing.T) {
 
 	t.Run("Success get records with custom where fragment", func(t *testing.T) {
 		list, errCode := repo.GetWhere(ctx, "name LIKE ? AND email = ?", "Active User%", "active1@example.com")
-		if errCode != xdb.ErrNone {
-			t.Errorf("expected ErrNone, got %s", errCode)
+		if errCode != xdb.XERR_NONE {
+			t.Errorf("expected XERR_NONE, got %s", errCode)
 		}
 		if len(list) != 1 {
 			t.Errorf("expected 1 record, got %d", len(list))
@@ -912,8 +912,8 @@ func TestDBGeneric_GetWhere(t *testing.T) {
 	t.Run("Fail when placeholders count and arguments length mismatch", func(t *testing.T) {
 		// Passamos 2 placeholders mas apenas 1 argumento de propósito
 		_, errCode := repo.GetWhere(ctx, "name = ? AND email = ?", "Active User One")
-		if errCode != xdb.ErrRepoGetWhereArgsMismatch {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetWhereArgsMismatch, errCode)
+		if errCode != xdb.XERR_REPO_GET_WHERE_ARGS_MISMATCH {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_WHERE_ARGS_MISMATCH, errCode)
 		}
 	})
 
@@ -923,8 +923,8 @@ func TestDBGeneric_GetWhere(t *testing.T) {
 		deadRepo := xdb.NewDBGeneric[MockUser](deadDb)
 
 		_, errCode := deadRepo.GetWhere(ctx, "name = ?", "Active User One")
-		if errCode != xdb.ErrRepoGetWhereExecFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetWhereExecFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_WHERE_EXEC_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_WHERE_EXEC_FAILED, errCode)
 		}
 	})
 
@@ -942,8 +942,8 @@ func TestDBGeneric_GetWhere(t *testing.T) {
 		}
 
 		_, errCode := repoScanFail.GetWhere(ctx, "email = ?", "fail@example.com")
-		if errCode != xdb.ErrRepoGetWhereScanFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetWhereScanFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_WHERE_SCAN_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_WHERE_SCAN_FAILED, errCode)
 		}
 	})
 
@@ -952,8 +952,8 @@ func TestDBGeneric_GetWhere(t *testing.T) {
 		repoRowsFail.SetExecutorForTest(mockExecutorRowsError{})
 
 		_, errCode := repoRowsFail.GetWhere(ctx, "name = ?", "FAIL_GETWHERE")
-		if errCode != xdb.ErrRepoGetAllIterationFailed {
-			t.Errorf("expected %s, got %s", xdb.ErrRepoGetAllIterationFailed, errCode)
+		if errCode != xdb.XERR_REPO_GET_ALL_ITERATION_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_GET_ALL_ITERATION_FAILED, errCode)
 		}
 	})
 }

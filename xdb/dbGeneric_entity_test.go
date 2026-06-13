@@ -30,7 +30,7 @@ func (m *MockUser) Validate() (bool, xerrors.ErrorCode) {
 	if m.Name == "INVALID" {
 		return false, "E9999" // Custom simulation error
 	}
-	return true, xdb.ErrNone
+	return true, xdb.XERR_NONE
 }
 
 // TableName returns the target dummy table name.

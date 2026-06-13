@@ -9,13 +9,6 @@ import (
 	"github.com/AeonDigital/Go-Core/xerrors"
 )
 
-// sqlExecutor unifies common database operations available on both *sql.DB and *sql.Tx connections.
-type sqlExecutor interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // DBGeneric implements a type-safe, generic repository pattern dedicated to a specific domain entity model.
 type DBGeneric[T any, PT interface {
 	*T
@@ -23,7 +16,7 @@ type DBGeneric[T any, PT interface {
 }] struct {
 	db                     *sql.DB
 	tx                     *sql.Tx
-	executor               sqlExecutor
+	executor               SQLExecutor
 	idempotentUpdateActive bool
 	idempotentDeleteActive bool
 }
@@ -50,22 +43,12 @@ func (r *DBGeneric[T, PT]) WithTx(tx *sql.Tx) *DBGeneric[T, PT] {
 	}
 }
 
-// getExecutor evaluates whether to pipeline execution states through an active transaction isolation or the global connection pool.
-func (r *DBGeneric[T, PT]) getExecutor() sqlExecutor {
+// GetSQLExecutor evaluates whether to pipeline execution states through an active transaction isolation or the global connection pool.
+func (r *DBGeneric[T, PT]) GetSQLExecutor() SQLExecutor {
 	if r.tx != nil {
 		return r.tx
 	}
 	return r.db
-}
-
-// ContextWithForcedIdempotency wraps the provided context to guarantee that down-stream update and delete actions run idempotently.
-func ContextWithForcedIdempotency(ctx context.Context) context.Context {
-	return context.WithValue(ctx, forceIdempotencyKey, true)
-}
-
-// ContextWithProhibitedIdempotency wraps the provided context to strictly block idempotent behavior on down-stream data modifications.
-func ContextWithProhibitedIdempotency(ctx context.Context) context.Context {
-	return context.WithValue(ctx, prohibitIdempotencyKey, true)
 }
 
 // QueryRaw coordinates the isolation, manual execution, and custom collection scan mapping of arbitrary database commands.
@@ -76,8 +59,8 @@ func QueryRaw[R any](
 ) ([]R, xerrors.ErrorCode) {
 	rows, err := db.QueryContext(ctx, cq.SQL, cq.Args...)
 	if err != nil {
-		logRepoError(ctx, db, ErrRepoQueryRawExecFailed, err, cq.SQL, cq.Args)
-		return nil, ErrRepoQueryRawExecFailed
+		logRepoError(ctx, db, XERR_REPO_QUERY_RAW_EXEC_FAILED, err, cq.SQL, cq.Args)
+		return nil, XERR_REPO_QUERY_RAW_EXEC_FAILED
 	}
 	defer rows.Close()
 
@@ -85,18 +68,18 @@ func QueryRaw[R any](
 	for rows.Next() {
 		item, err := cq.Scanner(rows)
 		if err != nil {
-			logRepoError(ctx, db, ErrRepoQueryRawScanFailed, err, cq.SQL, cq.Args)
-			return nil, ErrRepoQueryRawScanFailed
+			logRepoError(ctx, db, XERR_REPO_QUERY_RAW_SCAN_FAILED, err, cq.SQL, cq.Args)
+			return nil, XERR_REPO_QUERY_RAW_SCAN_FAILED
 		}
 		result = append(result, item)
 	}
 
 	if err = rows.Err(); err != nil {
-		logRepoError(ctx, db, ErrRepoGetAllIterationFailed, err, cq.SQL, cq.Args)
-		return nil, ErrRepoGetAllIterationFailed
+		logRepoError(ctx, db, XERR_REPO_GET_ALL_ITERATION_FAILED, err, cq.SQL, cq.Args)
+		return nil, XERR_REPO_GET_ALL_ITERATION_FAILED
 	}
 
-	return result, ErrNone
+	return result, XERR_NONE
 }
 
 // SetIdempotentUpdate overrides instance update settings to prevent throwing missing record validation errors on missing datasets.
@@ -134,22 +117,22 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 	switch v := currentPK.(type) {
 	case int64:
 		if v > 0 {
-			logRepoError(ctx, r.db, ErrRepoInsertHasNumericalPK, nil, "", nil)
-			return ErrRepoInsertHasNumericalPK
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_HAS_NUMERICAL_PK, nil, "", nil)
+			return XERR_REPO_INSERT_HAS_NUMERICAL_PK
 		}
 	case string:
 		if !entity.IsNaturalPK() && strings.TrimSpace(v) != "" {
-			logRepoError(ctx, r.db, ErrRepoInsertHasStringPK, nil, "", nil)
-			return ErrRepoInsertHasStringPK
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_HAS_STRING_PK, nil, "", nil)
+			return XERR_REPO_INSERT_HAS_STRING_PK
 		}
 		if entity.IsNaturalPK() && strings.TrimSpace(v) == "" {
-			logRepoError(ctx, r.db, ErrRepoInsertNaturalPKEmpty, nil, "", nil)
-			return ErrRepoInsertNaturalPKEmpty
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_NATURAL_PK_EMPTY, nil, "", nil)
+			return XERR_REPO_INSERT_NATURAL_PK_EMPTY
 		}
 	case nil:
 		if entity.IsNaturalPK() {
-			logRepoError(ctx, r.db, ErrRepoInsertNaturalPKNil, nil, "", nil)
-			return ErrRepoInsertNaturalPKNil
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_NATURAL_PK_NIL, nil, "", nil)
+			return XERR_REPO_INSERT_NATURAL_PK_NIL
 		}
 	}
 
@@ -179,11 +162,11 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 		strings.Join(placeholders, ", "),
 	)
 
-	executor := r.getExecutor()
+	executor := r.GetSQLExecutor()
 	result, err := executor.ExecContext(ctx, query, values...)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoInsertExecFailed, err, query, values)
-		return ErrRepoInsertExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_INSERT_EXEC_FAILED, err, query, values)
+		return XERR_REPO_INSERT_EXEC_FAILED
 	}
 
 	if entity.TablePK() == "id" {
@@ -205,7 +188,7 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 		}
 	}
 
-	return ErrNone
+	return XERR_NONE
 }
 
 // Update coordinates column updates while enforcing primary key validations and idempotency rules.
@@ -215,20 +198,20 @@ func (r *DBGeneric[T, PT]) Update(ctx context.Context, entity PT) xerrors.ErrorC
 	switch v := currentPK.(type) {
 	case int64:
 		if v <= 0 {
-			logRepoError(ctx, r.db, ErrRepoUpdateInvalidNumericalPK, nil, "", nil)
-			return ErrRepoUpdateInvalidNumericalPK
+			logRepoError(ctx, r.db, XERR_REPO_UPDATE_INVALID_NUMERICAL_PK, nil, "", nil)
+			return XERR_REPO_UPDATE_INVALID_NUMERICAL_PK
 		}
 	case string:
 		if strings.TrimSpace(v) == "" {
-			logRepoError(ctx, r.db, ErrRepoUpdateEmptyStringPK, nil, "", nil)
-			return ErrRepoUpdateEmptyStringPK
+			logRepoError(ctx, r.db, XERR_REPO_UPDATE_EMPTY_STRING_PK, nil, "", nil)
+			return XERR_REPO_UPDATE_EMPTY_STRING_PK
 		}
 	case nil:
-		logRepoError(ctx, r.db, ErrRepoUpdatePKNil, nil, "", nil)
-		return ErrRepoUpdatePKNil
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_PK_NIL, nil, "", nil)
+		return XERR_REPO_UPDATE_PK_NIL
 	default:
-		logRepoError(ctx, r.db, ErrRepoUpdateUnknownPKType, nil, "", nil)
-		return ErrRepoUpdateUnknownPKType
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_UNKNOWN_PK_TYPE, nil, "", nil)
+		return XERR_REPO_UPDATE_UNKNOWN_PK_TYPE
 	}
 
 	entity.Normalize()
@@ -242,8 +225,8 @@ func (r *DBGeneric[T, PT]) Update(ctx context.Context, entity PT) xerrors.ErrorC
 	values := entity.Values()
 
 	if len(cols) == 0 {
-		logRepoError(ctx, r.db, ErrRepoUpdateNoColumnsDefined, nil, "", nil)
-		return ErrRepoUpdateNoColumnsDefined
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_NO_COLUMNS_DEFINED, nil, "", nil)
+		return XERR_REPO_UPDATE_NO_COLUMNS_DEFINED
 	}
 
 	setFragments := make([]string, len(cols))
@@ -262,26 +245,26 @@ func (r *DBGeneric[T, PT]) Update(ctx context.Context, entity PT) xerrors.ErrorC
 
 	result, err := r.executor.ExecContext(ctx, query, args...)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoUpdateExecFailed, err, query, args)
-		return ErrRepoUpdateExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_EXEC_FAILED, err, query, args)
+		return XERR_REPO_UPDATE_EXEC_FAILED
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoUpdateVerifyRowsFailed, err, query, args)
-		return ErrRepoUpdateVerifyRowsFailed
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_VERIFY_ROWS_FAILED, err, query, args)
+		return XERR_REPO_UPDATE_VERIFY_ROWS_FAILED
 	}
 
 	if rowsAffected == 0 {
 		if r.shouldBeIdempotent(ctx, true) {
-			return ErrNone
+			return XERR_NONE
 		}
 
-		logRepoError(ctx, r.db, ErrRepoUpdateRecordNotFound, nil, query, args)
-		return ErrRepoUpdateRecordNotFound
+		logRepoError(ctx, r.db, XERR_REPO_UPDATE_RECORD_NOT_FOUND, nil, query, args)
+		return XERR_REPO_UPDATE_RECORD_NOT_FOUND
 	}
 
-	return ErrNone
+	return XERR_NONE
 }
 
 // Delete drops target records based on explicit key mapping evaluations.
@@ -297,26 +280,26 @@ func (r *DBGeneric[T, PT]) Delete(ctx context.Context, entity PT) xerrors.ErrorC
 
 	result, err := r.executor.ExecContext(ctx, query, pkValue)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoDeleteExecFailed, err, query, args)
-		return ErrRepoDeleteExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_DELETE_EXEC_FAILED, err, query, args)
+		return XERR_REPO_DELETE_EXEC_FAILED
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoDeleteVerifyRowsFailed, err, query, args)
-		return ErrRepoDeleteVerifyRowsFailed
+		logRepoError(ctx, r.db, XERR_REPO_DELETE_VERIFY_ROWS_FAILED, err, query, args)
+		return XERR_REPO_DELETE_VERIFY_ROWS_FAILED
 	}
 
 	if rowsAffected == 0 {
 		if r.shouldBeIdempotent(ctx, false) {
-			return ErrNone
+			return XERR_NONE
 		}
 
-		logRepoError(ctx, r.db, ErrRepoDeleteRecordNotFound, nil, query, args)
-		return ErrRepoDeleteRecordNotFound
+		logRepoError(ctx, r.db, XERR_REPO_DELETE_RECORD_NOT_FOUND, nil, query, args)
+		return XERR_REPO_DELETE_RECORD_NOT_FOUND
 	}
 
-	return ErrNone
+	return XERR_NONE
 }
 
 // GetByID performs a target row execution based on primary key mappings to fetch a singular type-safe entry instance.
@@ -333,22 +316,22 @@ func (r *DBGeneric[T, PT]) GetByID(ctx context.Context, id any) (*T, xerrors.Err
 
 	rows, err := r.executor.QueryContext(ctx, query, id)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetByIDExecFailed, err, query, args)
-		return nil, ErrRepoGetByIDExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_BY_ID_EXEC_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_BY_ID_EXEC_FAILED
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		logRepoError(ctx, r.db, ErrRepoGetByIDRecordNotFound, nil, query, args)
-		return nil, ErrRepoGetByIDRecordNotFound
+		logRepoError(ctx, r.db, XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND, nil, query, args)
+		return nil, XERR_REPO_GET_BY_ID_RECORD_NOT_FOUND
 	}
 
 	if err := instance.ScanRow(rows); err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetByIDScanFailed, err, query, args)
-		return nil, ErrRepoGetByIDScanFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_BY_ID_SCAN_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_BY_ID_SCAN_FAILED
 	}
 
-	return instance, ErrNone
+	return instance, XERR_NONE
 }
 
 // GetAll extracts every existing collection sequence context from the entity schema targets.
@@ -361,8 +344,8 @@ func (r *DBGeneric[T, PT]) GetAll(ctx context.Context) ([]*T, xerrors.ErrorCode)
 
 	rows, err := r.executor.QueryContext(ctx, query)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetAllExecFailed, err, query, nil)
-		return nil, ErrRepoGetAllExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_ALL_EXEC_FAILED, err, query, nil)
+		return nil, XERR_REPO_GET_ALL_EXEC_FAILED
 	}
 	defer rows.Close()
 
@@ -371,19 +354,19 @@ func (r *DBGeneric[T, PT]) GetAll(ctx context.Context) ([]*T, xerrors.ErrorCode)
 		var item PT = new(T)
 
 		if err := item.ScanRow(rows); err != nil {
-			logRepoError(ctx, r.db, ErrRepoGetAllScanFailed, err, query, nil)
-			return nil, ErrRepoGetAllScanFailed
+			logRepoError(ctx, r.db, XERR_REPO_GET_ALL_SCAN_FAILED, err, query, nil)
+			return nil, XERR_REPO_GET_ALL_SCAN_FAILED
 		}
 
 		list = append(list, item)
 	}
 
 	if err = rows.Err(); err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetAllIterationFailed, err, query, nil)
-		return nil, ErrRepoGetAllIterationFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_ALL_ITERATION_FAILED, err, query, nil)
+		return nil, XERR_REPO_GET_ALL_ITERATION_FAILED
 	}
 
-	return list, ErrNone
+	return list, XERR_NONE
 }
 
 // GetByField searches for matching dataset groups filtered by a specific column variable signature.
@@ -395,8 +378,8 @@ func (r *DBGeneric[T, PT]) GetByField(ctx context.Context, field string, value a
 
 	rows, err := r.executor.QueryContext(ctx, query, value)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetByFieldExecFailed, err, query, args)
-		return nil, ErrRepoGetByFieldExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_BY_FIELD_EXEC_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_BY_FIELD_EXEC_FAILED
 	}
 	defer rows.Close()
 
@@ -404,18 +387,18 @@ func (r *DBGeneric[T, PT]) GetByField(ctx context.Context, field string, value a
 	for rows.Next() {
 		var item PT = new(T)
 		if err := item.ScanRow(rows); err != nil {
-			logRepoError(ctx, r.db, ErrRepoGetByFieldScanFailed, err, query, args)
-			return nil, ErrRepoGetByFieldScanFailed
+			logRepoError(ctx, r.db, XERR_REPO_GET_BY_FIELD_SCAN_FAILED, err, query, args)
+			return nil, XERR_REPO_GET_BY_FIELD_SCAN_FAILED
 		}
 		list = append(list, item)
 	}
 
 	if err = rows.Err(); err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetAllIterationFailed, err, query, args)
-		return nil, ErrRepoGetAllIterationFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_ALL_ITERATION_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_ALL_ITERATION_FAILED
 	}
 
-	return list, ErrNone
+	return list, XERR_NONE
 }
 
 // GetWhere parses complex conditional dynamic parameters to retrieve subset target collections.
@@ -424,8 +407,8 @@ func (r *DBGeneric[T, PT]) GetWhere(ctx context.Context, queryFragment string, a
 	argCount := len(args)
 
 	if placeholderCount != argCount {
-		logRepoError(ctx, r.db, ErrRepoGetWhereArgsMismatch, nil, queryFragment, args)
-		return nil, ErrRepoGetWhereArgsMismatch
+		logRepoError(ctx, r.db, XERR_REPO_GET_WHERE_ARGS_MISMATCH, nil, queryFragment, args)
+		return nil, XERR_REPO_GET_WHERE_ARGS_MISMATCH
 	}
 
 	var meta PT = new(T)
@@ -433,8 +416,8 @@ func (r *DBGeneric[T, PT]) GetWhere(ctx context.Context, queryFragment string, a
 
 	rows, err := r.executor.QueryContext(ctx, query, args...)
 	if err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetWhereExecFailed, err, query, args)
-		return nil, ErrRepoGetWhereExecFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_WHERE_EXEC_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_WHERE_EXEC_FAILED
 	}
 	defer rows.Close()
 
@@ -442,16 +425,16 @@ func (r *DBGeneric[T, PT]) GetWhere(ctx context.Context, queryFragment string, a
 	for rows.Next() {
 		var item PT = new(T)
 		if err := item.ScanRow(rows); err != nil {
-			logRepoError(ctx, r.db, ErrRepoGetWhereScanFailed, err, query, args)
-			return nil, ErrRepoGetWhereScanFailed
+			logRepoError(ctx, r.db, XERR_REPO_GET_WHERE_SCAN_FAILED, err, query, args)
+			return nil, XERR_REPO_GET_WHERE_SCAN_FAILED
 		}
 		list = append(list, item)
 	}
 
 	if err = rows.Err(); err != nil {
-		logRepoError(ctx, r.db, ErrRepoGetAllIterationFailed, err, query, args)
-		return nil, ErrRepoGetAllIterationFailed
+		logRepoError(ctx, r.db, XERR_REPO_GET_ALL_ITERATION_FAILED, err, query, args)
+		return nil, XERR_REPO_GET_ALL_ITERATION_FAILED
 	}
 
-	return list, ErrNone
+	return list, XERR_NONE
 }

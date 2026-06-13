@@ -1,6 +1,7 @@
 package xdb
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/AeonDigital/Go-Core/xerrors"
@@ -15,6 +16,22 @@ const (
 	// prohibitIdempotencyKey enforces record existence validation even if the instance defaults to idempotent operations.
 	prohibitIdempotencyKey ctxIdempotencyKey = "prohibit_idempotency"
 )
+
+// SQLExecutor unifies common database operations available on both *sql.DB and *sql.Tx connections.
+type SQLExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// SQLiteConfig aggregates dedicated attributes and behavior modifiers needed to shape SQLite behavior.
+type SQLiteConfig struct {
+	Mode        string            `json:"mode"`
+	Dir         string            `json:"dir"`
+	FileName    string            `json:"fileName"`
+	QueryString string            `json:"querystring"`
+	Pragma      map[string]string `json:"pragma"`
+}
 
 // RowScanner defines the function signature required to map database columns into a structured type.
 type RowScanner[R any] func(rows *sql.Rows) (R, error)
