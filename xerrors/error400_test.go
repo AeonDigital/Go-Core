@@ -7,107 +7,89 @@ import (
 	"github.com/AeonDigital/Go-Core/xerrors"
 )
 
-// init registers a fake domain error to simulate an external package extension
-// and guarantee 100% path coverage inside NewError400.
-func init() {
-	xerrors.RegisterDomainErrors(
-		"ERR_MOCK",
-		map[xerrors.ErrorCode]xerrors.MetaMessage{
-			"E9999": xerrors.NewMetaMessage(
-				"mock validation failed",
-				"",
-				[]string{"FIELD", "VALUE"},
-			),
-		},
-	)
-}
+func TestError400_PolymorphicConstructor_Case1(t *testing.T) {
+	// Case 1: Testing extended domain signature (PKGCTX + Code)
+	// Using TestCtx and TestCode registered in our init block
+	err := xerrors.NewError400(TestCtx, TestCode, "param1", "param2")
 
-func TestNewError400_CoverageSuite(t *testing.T) {
-	tests := []struct {
-		name         string
-		inputArgs    []any
-		expectedCode xerrors.ErrorCode
-		containsText []string
-	}{
-		{
-			name:         "Path 1: Should return an empty message and XERR_NONE when args are omitted",
-			inputArgs:    []any{},
-			expectedCode: xerrors.XERR_NONE,
-			containsText: []string{""},
-		},
-		{
-			name: "Path 2: Should evaluate namespaced domain token when first two args are ErrorCodes",
-			inputArgs: []any{
-				xerrors.ErrorCode("ERR_MOCK"),
-				xerrors.ErrorCode("E9999"),
-				"TX-ID",             // CTX
-				"",                  // MSG (triggers default fallback)
-				"email_field",       // FIELD tag
-				"invalid_payload_v", // VALUE tag
-			},
-			expectedCode: xerrors.ErrorCode("ERR_MOCK:E9999"),
-			containsText: []string{"[CTX: TX-ID]", "[MSG: mock validation failed]", "[FIELD: email_field]", "[VALUE: invalid_payload_v]"},
-		},
-		{
-			name: "Path 3: Should evaluate core framework token when only the first arg is an ErrorCode",
-			inputArgs: []any{
-				xerrors.XERR_FIELD_REQUIRED,
-				"AUTH-FLOW", // CTX
-				"required",  // MSG
-				"password",  // FIELD tag
-			},
-			expectedCode: xerrors.ErrorCode("ERR_XERR:E1001"),
-			containsText: []string{"[CTX: AUTH-FLOW]", "[MSG: required]", "[FIELD: password]"},
-		},
-		{
-			name: "Path 4A: Should format string like standard Sprintf when first arg is plain text",
-			inputArgs: []any{
-				"the user metadata for id %d is invalid: %s",
-				42,
-				"malformed_email",
-			},
-			expectedCode: xerrors.XERR_NONE,
-			containsText: []string{"the user metadata for id 42 is invalid: malformed_email"},
-		},
-		{
-			name: "Path 4B: Should handle fallback gracefully when first arg is a single plain string",
-			inputArgs: []any{
-				"plain unformatted static text error",
-			},
-			expectedCode: xerrors.XERR_NONE,
-			containsText: []string{"plain unformatted static text error"},
-		},
-		{
-			name: "Path 4C: Should handle fallback gracefully when initial parameter is an unmapped type",
-			inputArgs: []any{
-				12345, // Not a string, nor an ErrorCode
-				"extra data",
-			},
-			expectedCode: xerrors.XERR_NONE,
-			containsText: []string{"12345", "extra data"},
-		},
+	if err.Code() != TestCode {
+		t.Errorf("expected code to be %s, got %s", TestCode, err.Code())
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotErr := xerrors.NewError400(tt.inputArgs...)
+	// Dynamic tags formatting check
+	output := err.Error()
+	if !strings.Contains(output, "[TAG1: param1]") || !strings.Contains(output, "[TAG2: param2]") {
+		t.Errorf("expected output to contain extracted dynamic tags, got:\n%s", output)
+	}
+}
 
-			if gotErr == nil {
-				t.Fatal("Expected NewError400 to return a valid non-nil IError400 interface instance")
-			}
+func TestError400_PolymorphicConstructor_Case2(t *testing.T) {
+	// Case 2: Testing core framework signature (only first code token provided)
+	// XERR_FIELD_REQUIRED is a native constant inside pkg_xerrors.go
+	err := xerrors.NewError400(xerrors.XERR_FIELD_REQUIRED, "email_field")
 
-			// Validate if the ErrorCode mapping contract was respected
-			if gotErr.Code() != tt.expectedCode {
-				t.Errorf("Code() = %q, want %q", gotErr.Code(), tt.expectedCode)
-			}
+	if err.Code() != xerrors.XERR_FIELD_REQUIRED {
+		t.Errorf("expected code to be %s, got %s", xerrors.XERR_FIELD_REQUIRED, err.Code())
+	}
 
-			// Validate if the generated error message string contains the expected structural tokens
-			errString := gotErr.Error()
-			for _, textSegment := range tt.containsText {
-				if !strings.Contains(errString, textSegment) {
-					t.Errorf("Error() string %q was expected to contain segment %q but it did not", errString, textSegment)
-				}
-			}
-		})
+	output := err.Error()
+	if !strings.Contains(output, "[FIELD: email_field]") {
+		t.Errorf("expected output to contain core metadata FIELD tag, got:\n%s", output)
+	}
+}
+
+func TestError400_PolymorphicConstructor_Case3(t *testing.T) {
+	// Case 3: Fallback to standard text plain or Sprintf formatting string
+	errSimple := xerrors.NewError400("simple unmapped plain error")
+	if errSimple.Code() != xerrors.XERR_NONE {
+		t.Errorf("expected code XERR_NONE for plain text, got %s", errSimple.Code())
+	}
+
+	errFormatted := xerrors.NewError400("invalid parameter %s with value %d", "age", 15)
+	if !strings.Contains(errFormatted.Error(), "[MSG: invalid parameter age with value 15]") {
+		t.Errorf("expected formatted string output, got:\n%s", errFormatted.Error())
+	}
+}
+
+func TestError400_PolymorphicConstructor_EmptyAndSafeguards(t *testing.T) {
+	// Scenario A: Absolutely no parameters passed to the variadic block
+	errEmpty := xerrors.NewError400()
+	if errEmpty == nil {
+		t.Fatal("expected instance to be returned even with zero arguments")
+	}
+
+	// Scenario B: Unexpected data type sent into the first positioning slot
+	// Triggers the fmt.Sprintf("%v", args) ultimate structural safeguard branch
+	badSlice := []int{1, 2, 3}
+	errSafeguard := xerrors.NewError400(badSlice)
+
+	if !strings.Contains(errSafeguard.Error(), "[1 2 3]") {
+		t.Errorf("expected unexpected type to be safely dumped as string, got:\n%s", errSafeguard.Error())
+	}
+}
+
+func TestError400_WithArgs_EmptyBoundary(t *testing.T) {
+	errBase := xerrors.NewError400("baseline validation message")
+
+	// Invoking WithArgs with absolutely no parameters should return the exact same instance pointer
+	// This branch protects against unnecessary memory allocation/cloning overhead
+	errSame := errBase.WithArgs()
+
+	if errBase != errSame {
+		t.Error("expected WithArgs with no elements to bypass cloning and return identical instance pointer")
+	}
+}
+
+func TestError400_WithArgs_ValidPayload(t *testing.T) {
+	// Start with a basic plain text validation error
+	errBase := xerrors.NewError400("initial validation failure")
+
+	// Chain WithArgs to inject structured fields later in the process
+	errWithFields := errBase.WithArgs("injected_param_val")
+
+	// Verify that a new instance was generated and it formatted correctly
+	output := errWithFields.Error()
+	if output == "" {
+		t.Error("expected populated output from the cloned instance")
 	}
 }

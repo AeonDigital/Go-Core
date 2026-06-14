@@ -1,14 +1,16 @@
 package xerrors
 
+import "sync"
+
 // ErrorCode defines a domain-specific string representation for error classification.
 type ErrorCode string
 
-// errorRegistry centralizes all specialized error metadata blocks and behavioral definitions
-// within the xerrors ecosystem, eliminating verbose switch-case statements and reducing maintenance overhead.
-var xerrorMapRegistry = map[ErrorCode]MetaMessage{}
+// xerrorMapRegistry centralizes specialized error metadata definitions.
+// Converted to sync.Map to ensure lock-free concurrent reads during application uptime.
+var xerrorMapRegistry sync.Map // Internally stores map[ErrorCode]MetaMessage
 
-// xerrorMapStringToErrorCode maps a string code (e.g., "E1001") back to its ErrorCode constant.
-var xerrorMapStringToErrorCode = map[string]ErrorCode{}
+// xerrorMapStringToErrorCode maps a unified string context back to its ErrorCode constant.
+var xerrorMapStringToErrorCode sync.Map // Internally stores map[string]ErrorCode
 
 const (
 	XERR_NONE   ErrorCode = ""
@@ -352,8 +354,7 @@ func init() {
 }
 
 // RegisterDomainErrors injects custom domain error configurations into the centralized core registry.
-// It automatically establishes a unique namespace using the pkgCtx token (e.g., transforming "E1001"
-// into "ERR_USER:E1001") to seamlessly eliminate mapping collisions between independent packages.
+// It uses sync.Map capabilities to safely register codes even if called concurrently during uptime.
 func RegisterDomainErrors(pkgCtx ErrorCode, customRegistry map[ErrorCode]MetaMessage) {
 	for code, meta := range customRegistry {
 
@@ -361,11 +362,11 @@ func RegisterDomainErrors(pkgCtx ErrorCode, customRegistry map[ErrorCode]MetaMes
 		fullCodeStr := string(pkgCtx) + ":" + string(code)
 		fullErrorCode := ErrorCode(fullCodeStr)
 
-		// Integrity check to protect core framework boundaries from accidental overwrites
-		_, exists := xerrorMapRegistry[fullErrorCode]
-		if !exists {
-			xerrorMapRegistry[fullErrorCode] = meta
-			xerrorMapStringToErrorCode[fullCodeStr] = fullErrorCode
+		// Integrity check using LoadOrStore to protect core framework boundaries from overwrites
+		// If the key does not exist, it stores the value and returns (nil, false)
+		_, loaded := xerrorMapRegistry.LoadOrStore(fullErrorCode, meta)
+		if !loaded {
+			xerrorMapStringToErrorCode.Store(fullCodeStr, fullErrorCode)
 		}
 	}
 }

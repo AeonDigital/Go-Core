@@ -7,89 +7,95 @@ import (
 // IError400 standardizes validation and client-side failures, allowing
 // transport layers to seamlessly extract error codes without string parsing.
 type IError400 interface {
-	// Code returns the categorical string constant domain mapping for this validation event.
+	// Code returns the categorical failure domain classification.
 	Code() ErrorCode
+
+	// WithArgs appends dynamic contextual payloads to map sequentially into metadata extraTags.
+	WithArgs(args ...any) IError400
 
 	// error ensures native alignment with Go standard library error handling semantics.
 	error
 }
 
-// error400 provides a high-performance, lightweight implementation of IError400.
-// It bypasses runtime stack inspection, making it ideal for high-throughput user input validations.
-type error400 struct {
-	// code maps the failure to a domain-specific category
-	errCode ErrorCode
-
-	// errMSG stores the fully compiled, human-readable validation summary or formatted output.
-	errMSG string
+// error400Adapter wraps the internal private engine to satisfy the public IError400 contract.
+type error400Adapter struct {
+	*xError
 }
 
 // NewError400 acts as a highly flexible, polymorphic factory that creates and returns an IError400 instance.
-// It abstracts away method overloading limitations in Go by inspecting the type sequence of its variadic arguments.
-//
-// The evaluation hierarchy operates as follows:
-//  1. Composed Domain Token: If the first two arguments are identified as ErrorCode types, they are unified
-//     into a namespaced key (e.g., "PKGCTX:E1001") to match domain-extended registries.
-//  2. Core Package Token: If only the first argument is an ErrorCode, the factory falls back to the core
-//     infrastructure namespace ("ERR_XERR:E1001").
-//  3. Plain Text/Standard Format: If no initial ErrorCode tokens are detected, it evaluates the arguments
-//     as a standard fmt.Sprintf format string or raw message, defaulting the error code tracking state to XERR_NONE.
+// It preserves low cognitive load for the developer while extracting control tokens from raw telemetry tags.
 func NewError400(args ...any) IError400 {
 	if len(args) == 0 {
-		return &error400{
-			errCode: XERR_NONE,
-			errMSG:  "",
+		return &error400Adapter{
+			xError: &xError{
+				contextCode:   XERR_PKGCTX,
+				errorCode:     XERR_NONE,
+				isOperational: false,
+			},
 		}
 	}
 
+	var finalCtx ErrorCode = XERR_PKGCTX
 	var finalCode ErrorCode = XERR_NONE
 	var processedText string
+	var cleanedArgs []any
 
-	// Step 1: Evaluate if the first two arguments match an extended domain signature (PKGCTX + Code)
+	// Case 1: Evaluate if the first two arguments match an extended domain signature (PKGCTX + Code)
 	if len(args) >= 2 {
 		pkgCtx, ok1 := args[0].(ErrorCode)
 		code, ok2 := args[1].(ErrorCode)
 
 		if ok1 && ok2 {
 			composedKey := string(pkgCtx) + ":" + string(code)
-			registeredCode, exists := xerrorMapStringToErrorCode[composedKey]
-			if exists {
-				finalCode = registeredCode
 
-				// Consume the two token parameters and forward the rest to the layout builder
-				formatMsg, maskArgs := buildMask(xerrorMapRegistry[registeredCode], args[2:])
-				processedText = fmt.Sprintf(formatMsg, maskArgs...)
+			if _, exists := xerrorMapStringToErrorCode.Load(composedKey); exists {
+				finalCtx = pkgCtx
+				finalCode = code // FIX: Store the isolated token code to match formatting requirements
 
-				return &error400{
-					errCode: finalCode,
-					errMSG:  processedText,
+				// Clean slice: extract control tokens and retain only raw data fields
+				if len(args) > 2 {
+					cleanedArgs = make([]any, len(args)-2)
+					copy(cleanedArgs, args[2:])
+				}
+
+				return &error400Adapter{
+					xError: &xError{
+						contextCode:   finalCtx,
+						errorCode:     finalCode,
+						arguments:     cleanedArgs,
+						isOperational: false,
+					},
 				}
 			}
 		}
 	}
 
-	// Step 2: Evaluate if only the first argument matches a core framework signature
-	firstCode, ok := args[0].(ErrorCode)
-	if ok {
+	// Case 2: Evaluate if only the first argument matches a core framework signature
+	if firstCode, ok := args[0].(ErrorCode); ok {
 		coreKey := string(XERR_PKGCTX) + ":" + string(firstCode)
-		registeredCode, exists := xerrorMapStringToErrorCode[coreKey]
-		if exists {
-			finalCode = registeredCode
 
-			// Consume the single core token and forward the rest to the layout builder
-			formatMsg, maskArgs := buildMask(xerrorMapRegistry[registeredCode], args[1:])
-			processedText = fmt.Sprintf(formatMsg, maskArgs...)
+		if _, exists := xerrorMapStringToErrorCode.Load(coreKey); exists {
+			finalCode = firstCode // FIX: Store the isolated core code token
 
-			return &error400{
-				errCode: finalCode,
-				errMSG:  processedText,
+			// Clean slice: drop the core token and keep subsequent metadata payloads
+			if len(args) > 1 {
+				cleanedArgs = make([]any, len(args)-1)
+				copy(cleanedArgs, args[1:])
+			}
+
+			return &error400Adapter{
+				xError: &xError{
+					contextCode:   XERR_PKGCTX,
+					errorCode:     finalCode,
+					arguments:     cleanedArgs,
+					isOperational: false,
+				},
 			}
 		}
 	}
 
-	// Step 3: Fallback to standard string formatting or raw text parsing
-	firstStr, ok := args[0].(string)
-	if ok {
+	// Case 3: Fallback to standard string formatting or raw text parsing
+	if firstStr, ok := args[0].(string); ok {
 		if len(args) > 1 {
 			processedText = fmt.Sprintf(firstStr, args[1:]...)
 		} else {
@@ -100,18 +106,45 @@ func NewError400(args ...any) IError400 {
 		processedText = fmt.Sprintf("%v", args)
 	}
 
-	return &error400{
-		errCode: XERR_NONE,
-		errMSG:  processedText,
+	return &error400Adapter{
+		xError: &xError{
+			contextCode:   XERR_PKGCTX,
+			errorCode:     XERR_NONE,
+			message:       processedText,
+			isOperational: false,
+		},
 	}
 }
 
-// Code retrieves the structured domain classification assigned to this validation error.
-func (e *error400) Code() ErrorCode {
-	return e.errCode
+// Code retrieves the structured domain classification code.
+func (a *error400Adapter) Code() ErrorCode {
+	return a.errorCode
 }
 
-// Error satisfies the standard Go library error handling interface contract specification.
-func (e *error400) Error() string {
-	return e.errMSG
+// WithArgs injects dynamic validation tracking variables into the instance safely.
+func (a *error400Adapter) WithArgs(args ...any) IError400 {
+	if len(args) == 0 {
+		return a
+	}
+
+	a.mu.RLock()
+	clonedEngine := &xError{
+		contextCode:   a.contextCode,
+		errorCode:     a.errorCode,
+		underlyingErr: a.underlyingErr,
+		message:       a.message,
+		info:          a.info,
+		isOperational: a.isOperational,
+	}
+	a.mu.RUnlock()
+
+	clonedEngine.arguments = make([]any, len(args))
+	copy(clonedEngine.arguments, args)
+
+	return &error400Adapter{xError: clonedEngine}
+}
+
+// Error evaluates the final layout output string via strings.Builder.
+func (a *error400Adapter) Error() string {
+	return a.format()
 }
