@@ -1,4 +1,4 @@
-package xbridge
+package bfilepath
 
 import (
 	"path/filepath"

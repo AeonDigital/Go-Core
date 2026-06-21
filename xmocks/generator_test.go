@@ -321,9 +321,8 @@ func TestDeriveSetReturn_SingleResultName(t *testing.T) {
 }
 
 func TestRenderMock_ImportsWithAlias(t *testing.T) {
-	// Ajustado conforme sua nova assinatura para renderMock:
-	// renderMock(packageName, sourcePackage, alias, methods, usedImports)
-	code, err := renderMock("mocks", "sample", "Example", nil, map[string]string{"ioAlias": "io"})
+	// Adicionado o parâmetro final "sample/file.go" na chamada da renderMock
+	code, err := renderMock("mocks", "sample", "Example", nil, map[string]string{"ioAlias": "io"}, "sample/file.go")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package xbridge
+package bfs
 
 import (
 	"io/fs"
@@ -30,6 +30,15 @@ type sFileInfoBridge struct {
 
 // Ensure at compile time that the private struct implements the public interface.
 var _ IFileInfoBridge = (*sFileInfoBridge)(nil)
+
+// NewFileInfo wraps a concrete fs.FileInfo and returns it as a public, mockable IFIFileInfoBridgeleInfo interface.
+// This is the production entry point used when converting native filesystem metadata.
+func NewFileInfo(info fs.FileInfo) IFileInfoBridge {
+	if info == nil {
+		return nil
+	}
+	return &sFileInfoBridge{info: info}
+}
 
 func (s *sFileInfoBridge) Name() string       { return s.info.Name() }
 func (s *sFileInfoBridge) Size() int64        { return s.info.Size() }

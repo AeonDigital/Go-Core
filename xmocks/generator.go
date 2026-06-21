@@ -77,7 +77,7 @@ func GenerateMockFile(opts GeneratorOptions) (string, error) {
 		packageName = dirName
 	}
 
-	code, err := renderMock(packageName, srcFile.Name.Name, opts.Alias, methods, usedImports)
+	code, err := renderMock(packageName, srcFile.Name.Name, opts.Alias, methods, usedImports, opts.InputFile)
 	if err != nil {
 		return "", err
 	}
@@ -370,6 +370,7 @@ func renderMock(
 	alias string,
 	methods []MethodInfo,
 	usedImports map[string]string,
+	inputFile string,
 ) ([]byte, error) {
 	imports := map[string]string{}
 	imports["fmt"] = "fmt"
@@ -381,6 +382,9 @@ func renderMock(
 	if packageName != sourcePackage {
 		modPath := getModulePath()
 		if modPath != "" {
+			subFolder := filepath.Dir(inputFile)
+			subFolder = filepath.ToSlash(subFolder)
+			subFolder = strings.TrimPrefix(subFolder, "./")
 
 			needParentImport := false
 			for _, method := range methods {
@@ -393,7 +397,7 @@ func renderMock(
 			}
 
 			if needParentImport {
-				imports[sourcePackage] = modPath + "/" + sourcePackage
+				imports[sourcePackage] = modPath + "/" + subFolder
 			}
 		}
 	}

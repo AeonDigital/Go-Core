@@ -1,7 +1,9 @@
-package xbridge
+package bos
 
 import (
 	"path/filepath"
+
+	"github.com/AeonDigital/Go-Core/xbridge/go/bruntime"
 )
 
 // osexpansion_UserLogDir resolves the platform-specific default path
@@ -16,14 +18,14 @@ import (
 // If the location cannot be determined (for example, $HOME is not defined),
 // then it will return an error.
 func os_UserLogDir() (string, error) {
-	home, err := OSBridge.UserHomeDir()
+	home, err := OS.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	switch RuntimeBridge.GOOS() {
+	switch bruntime.Runtime.GOOS() {
 	case "windows":
-		localAppData := OSBridge.Getenv("LOCALAPPDATA")
+		localAppData := OS.Getenv("LOCALAPPDATA")
 		if localAppData == "" {
 			return filepath.Join(home, "AppData", "Local", "Logs"), nil
 		}
@@ -35,7 +37,7 @@ func os_UserLogDir() (string, error) {
 
 	default:
 		// XDG_STATE_HOME (~/.local/state) - Recommended for persistent history/logs
-		xdgState := OSBridge.Getenv("XDG_STATE_HOME")
+		xdgState := OS.Getenv("XDG_STATE_HOME")
 		if xdgState == "" {
 			return filepath.Join(home, ".local", "state"), nil
 		}

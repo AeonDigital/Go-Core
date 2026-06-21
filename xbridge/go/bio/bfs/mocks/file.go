@@ -3,7 +3,7 @@ package mocks
 
 import (
 	"fmt"
-	"github.com/AeonDigital/Go-Core/xbridge"
+	"github.com/AeonDigital/Go-Core/xbridge/go/bio/bfs"
 	"io/fs"
 	"runtime"
 )
@@ -34,7 +34,7 @@ type MockFile struct {
 	SeekFunc        func(offset int64, whence int) (int64, error)
 	CloseFunc       func() error
 	SyncFunc        func() error
-	StatFunc        func() (xbridge.IFileInfoBridge, error)
+	StatFunc        func() (bfs.IFileInfoBridge, error)
 	FdFunc          func() uintptr
 	NameFunc        func() string
 	ReadDirFunc     func(n int) ([]fs.DirEntry, error)
@@ -115,7 +115,7 @@ func (oMock *MockFile) Sync() error {
 	return oMock.SyncFunc()
 }
 
-func (oMock *MockFile) Stat() (xbridge.IFileInfoBridge, error) {
+func (oMock *MockFile) Stat() (bfs.IFileInfoBridge, error) {
 	if oMock.StatFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
@@ -179,7 +179,7 @@ func (o *mockOnCallFile) Sync(fn func() error) {
 	o.mock.SyncFunc = fn
 }
 
-func (o *mockOnCallFile) Stat(fn func() (xbridge.IFileInfoBridge, error)) {
+func (o *mockOnCallFile) Stat(fn func() (bfs.IFileInfoBridge, error)) {
 	o.mock.StatFunc = fn
 }
 
@@ -247,8 +247,8 @@ func (r *mockSetReturnFile) Sync(err error) {
 	})
 }
 
-func (r *mockSetReturnFile) Stat(result0 xbridge.IFileInfoBridge, err error) {
-	r.mock.OnCall.Stat(func() (xbridge.IFileInfoBridge, error) {
+func (r *mockSetReturnFile) Stat(result0 bfs.IFileInfoBridge, err error) {
+	r.mock.OnCall.Stat(func() (bfs.IFileInfoBridge, error) {
 		return result0, err
 	})
 }

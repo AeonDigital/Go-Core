@@ -1,4 +1,4 @@
-package xbridge
+package bruntime
 
 import "runtime"
 
@@ -66,6 +66,12 @@ type sruntimeBridge struct{}
 // Ensure at compile time that the private struct implements the public interface.
 var _ IRuntimeBridge = sruntimeBridge{}
 
+// NewRuntimeBridge creates and returns a public, mockable IRuntimeBridge instance pointing
+// to the production system runtime diagnostics implementation.
+func NewRuntime() IRuntimeBridge {
+	return sruntimeBridge{}
+}
+
 // =========================================================================
 // IMPLEMENTATION OF PLATFORM IDENTIFICATION
 // =========================================================================
@@ -94,4 +100,4 @@ func (sruntimeBridge) Caller(skip int) (uintptr, string, int, bool) {
 // RuntimeBridge is the global public variable used by all core application code
 // to query platform architecture, memory metrics, and runtime diagnostics.
 // It can be easily hot-swapped at unit test boundaries via generated pkgxmock utilities.
-var RuntimeBridge IRuntimeBridge = sruntimeBridge{}
+var Runtime IRuntimeBridge = NewRuntime()

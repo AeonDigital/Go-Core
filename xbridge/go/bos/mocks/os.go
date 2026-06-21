@@ -3,11 +3,12 @@ package mocks
 
 import (
 	"fmt"
-	"github.com/AeonDigital/Go-Core/xbridge"
 	"io/fs"
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/AeonDigital/Go-Core/xbridge/go/bio/bfs"
 )
 
 type TestCaseOS struct {
@@ -28,10 +29,10 @@ func NewMockOS() *MockOS {
 }
 
 type MockOS struct {
-	CreateFunc        func(name string) (xbridge.IFileBridge, error)
-	OpenFunc          func(name string) (xbridge.IFileBridge, error)
-	OpenFileFunc      func(name string, flag int, perm os.FileMode) (xbridge.IFileBridge, error)
-	CreateTempFunc    func(dir, pattern string) (xbridge.IFileBridge, error)
+	CreateFunc        func(name string) (bfs.IFileBridge, error)
+	OpenFunc          func(name string) (bfs.IFileBridge, error)
+	OpenFileFunc      func(name string, flag int, perm os.FileMode) (bfs.IFileBridge, error)
+	CreateTempFunc    func(dir, pattern string) (bfs.IFileBridge, error)
 	MkdirFunc         func(name string, perm os.FileMode) error
 	MkdirAllFunc      func(path string, perm os.FileMode) error
 	RemoveFunc        func(name string) error
@@ -43,8 +44,8 @@ type MockOS struct {
 	ChownFunc         func(name string, uid, gid int) error
 	LchownFunc        func(name string, uid, gid int) error
 	ChtimesFunc       func(name string, atime time.Time, mtime time.Time) error
-	StatFunc          func(name string) (xbridge.IFileInfoBridge, error)
-	LstatFunc         func(name string) (xbridge.IFileInfoBridge, error)
+	StatFunc          func(name string) (bfs.IFileInfoBridge, error)
+	LstatFunc         func(name string) (bfs.IFileInfoBridge, error)
 	IsNotExistFunc    func(err error) bool
 	IsExistFunc       func(err error) bool
 	IsPermissionFunc  func(err error) bool
@@ -94,28 +95,28 @@ func (m *MockOS) panicIfNotConfigured() {
 	panic(fmt.Sprintf("CRITICAL: Mock for %s not configured.", methodName))
 }
 
-func (oMock *MockOS) Create(name string) (xbridge.IFileBridge, error) {
+func (oMock *MockOS) Create(name string) (bfs.IFileBridge, error) {
 	if oMock.CreateFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
 	return oMock.CreateFunc(name)
 }
 
-func (oMock *MockOS) Open(name string) (xbridge.IFileBridge, error) {
+func (oMock *MockOS) Open(name string) (bfs.IFileBridge, error) {
 	if oMock.OpenFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
 	return oMock.OpenFunc(name)
 }
 
-func (oMock *MockOS) OpenFile(name string, flag int, perm os.FileMode) (xbridge.IFileBridge, error) {
+func (oMock *MockOS) OpenFile(name string, flag int, perm os.FileMode) (bfs.IFileBridge, error) {
 	if oMock.OpenFileFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
 	return oMock.OpenFileFunc(name, flag, perm)
 }
 
-func (oMock *MockOS) CreateTemp(dir, pattern string) (xbridge.IFileBridge, error) {
+func (oMock *MockOS) CreateTemp(dir, pattern string) (bfs.IFileBridge, error) {
 	if oMock.CreateTempFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
@@ -199,14 +200,14 @@ func (oMock *MockOS) Chtimes(name string, atime time.Time, mtime time.Time) erro
 	return oMock.ChtimesFunc(name, atime, mtime)
 }
 
-func (oMock *MockOS) Stat(name string) (xbridge.IFileInfoBridge, error) {
+func (oMock *MockOS) Stat(name string) (bfs.IFileInfoBridge, error) {
 	if oMock.StatFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
 	return oMock.StatFunc(name)
 }
 
-func (oMock *MockOS) Lstat(name string) (xbridge.IFileInfoBridge, error) {
+func (oMock *MockOS) Lstat(name string) (bfs.IFileInfoBridge, error) {
 	if oMock.LstatFunc == nil {
 		oMock.panicIfNotConfigured()
 	}
@@ -413,19 +414,19 @@ type mockOnCallOS struct {
 	mock *MockOS
 }
 
-func (o *mockOnCallOS) Create(fn func(name string) (xbridge.IFileBridge, error)) {
+func (o *mockOnCallOS) Create(fn func(name string) (bfs.IFileBridge, error)) {
 	o.mock.CreateFunc = fn
 }
 
-func (o *mockOnCallOS) Open(fn func(name string) (xbridge.IFileBridge, error)) {
+func (o *mockOnCallOS) Open(fn func(name string) (bfs.IFileBridge, error)) {
 	o.mock.OpenFunc = fn
 }
 
-func (o *mockOnCallOS) OpenFile(fn func(name string, flag int, perm os.FileMode) (xbridge.IFileBridge, error)) {
+func (o *mockOnCallOS) OpenFile(fn func(name string, flag int, perm os.FileMode) (bfs.IFileBridge, error)) {
 	o.mock.OpenFileFunc = fn
 }
 
-func (o *mockOnCallOS) CreateTemp(fn func(dir, pattern string) (xbridge.IFileBridge, error)) {
+func (o *mockOnCallOS) CreateTemp(fn func(dir, pattern string) (bfs.IFileBridge, error)) {
 	o.mock.CreateTempFunc = fn
 }
 
@@ -473,11 +474,11 @@ func (o *mockOnCallOS) Chtimes(fn func(name string, atime time.Time, mtime time.
 	o.mock.ChtimesFunc = fn
 }
 
-func (o *mockOnCallOS) Stat(fn func(name string) (xbridge.IFileInfoBridge, error)) {
+func (o *mockOnCallOS) Stat(fn func(name string) (bfs.IFileInfoBridge, error)) {
 	o.mock.StatFunc = fn
 }
 
-func (o *mockOnCallOS) Lstat(fn func(name string) (xbridge.IFileInfoBridge, error)) {
+func (o *mockOnCallOS) Lstat(fn func(name string) (bfs.IFileInfoBridge, error)) {
 	o.mock.LstatFunc = fn
 }
 
@@ -597,26 +598,26 @@ type mockSetReturnOS struct {
 	mock *MockOS
 }
 
-func (r *mockSetReturnOS) Create(result0 xbridge.IFileBridge, err error) {
-	r.mock.OnCall.Create(func(name string) (xbridge.IFileBridge, error) {
+func (r *mockSetReturnOS) Create(result0 bfs.IFileBridge, err error) {
+	r.mock.OnCall.Create(func(name string) (bfs.IFileBridge, error) {
 		return result0, err
 	})
 }
 
-func (r *mockSetReturnOS) Open(result0 xbridge.IFileBridge, err error) {
-	r.mock.OnCall.Open(func(name string) (xbridge.IFileBridge, error) {
+func (r *mockSetReturnOS) Open(result0 bfs.IFileBridge, err error) {
+	r.mock.OnCall.Open(func(name string) (bfs.IFileBridge, error) {
 		return result0, err
 	})
 }
 
-func (r *mockSetReturnOS) OpenFile(result0 xbridge.IFileBridge, err error) {
-	r.mock.OnCall.OpenFile(func(name string, flag int, perm os.FileMode) (xbridge.IFileBridge, error) {
+func (r *mockSetReturnOS) OpenFile(result0 bfs.IFileBridge, err error) {
+	r.mock.OnCall.OpenFile(func(name string, flag int, perm os.FileMode) (bfs.IFileBridge, error) {
 		return result0, err
 	})
 }
 
-func (r *mockSetReturnOS) CreateTemp(result0 xbridge.IFileBridge, err error) {
-	r.mock.OnCall.CreateTemp(func(dir, pattern string) (xbridge.IFileBridge, error) {
+func (r *mockSetReturnOS) CreateTemp(result0 bfs.IFileBridge, err error) {
+	r.mock.OnCall.CreateTemp(func(dir, pattern string) (bfs.IFileBridge, error) {
 		return result0, err
 	})
 }
@@ -687,14 +688,14 @@ func (r *mockSetReturnOS) Chtimes(err error) {
 	})
 }
 
-func (r *mockSetReturnOS) Stat(result0 xbridge.IFileInfoBridge, err error) {
-	r.mock.OnCall.Stat(func(name string) (xbridge.IFileInfoBridge, error) {
+func (r *mockSetReturnOS) Stat(result0 bfs.IFileInfoBridge, err error) {
+	r.mock.OnCall.Stat(func(name string) (bfs.IFileInfoBridge, error) {
 		return result0, err
 	})
 }
 
-func (r *mockSetReturnOS) Lstat(result0 xbridge.IFileInfoBridge, err error) {
-	r.mock.OnCall.Lstat(func(name string) (xbridge.IFileInfoBridge, error) {
+func (r *mockSetReturnOS) Lstat(result0 bfs.IFileInfoBridge, err error) {
+	r.mock.OnCall.Lstat(func(name string) (bfs.IFileInfoBridge, error) {
 		return result0, err
 	})
 }

@@ -1,4 +1,4 @@
-package xbridge
+package bfs
 
 import (
 	"io/fs"
@@ -103,6 +103,15 @@ type sFileBridge struct {
 
 // Ensure at compile time that the private struct implements the public interface.
 var _ IFileBridge = (*sFileBridge)(nil)
+
+// NewFileBridge wraps a concrete *os.File and returns it as a public, mockable IFileBridge interface.
+// This is the production entry point used when converting native os.File descriptors.
+func NewFile(f *os.File) IFileBridge {
+	if f == nil {
+		return nil
+	}
+	return &sFileBridge{file: f}
+}
 
 func (f *sFileBridge) Read(b []byte) (int, error)               { return f.file.Read(b) }
 func (f *sFileBridge) ReadAt(b []byte, off int64) (int, error)  { return f.file.ReadAt(b, off) }

@@ -1,4 +1,4 @@
-package xbridge
+package bio
 
 import "io"
 
@@ -109,6 +109,12 @@ type sioBridge struct{}
 // Ensure at compile time that the private struct implements the public interface.
 var _ IIOBridge = sioBridge{}
 
+// NewIOBridge creates and returns a public, mockable IIOBridge instance pointing
+// to the production input/output data stream implementation.
+func NewIO() IIOBridge {
+	return sioBridge{}
+}
+
 // =========================================================================
 // IMPLEMENTATION OF DATA COPYING
 // =========================================================================
@@ -164,7 +170,7 @@ func (sioBridge) NopCloser(r io.Reader) io.ReadCloser {
 // GLOBAL PUBLIC INTERFACE INSTANCE
 // =========================================================================
 
-// IOBridge is the global public variable used by all core application code
+// IO is the global public variable used by all core application code
 // to perform input/output data stream manipulation and copying.
 // It can be easily hot-swapped at unit test boundaries via generated pkgxmock utilities.
-var IOBridge IIOBridge = sioBridge{}
+var IO IIOBridge = NewIO()

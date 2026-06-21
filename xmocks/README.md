@@ -58,17 +58,21 @@ go run ./xmocks --file=<path/to/source.go> --interface=<InterfaceName> [--alias=
 To generate the standard `xbridge` mocks architecture inside your project, execute the following commands in sequence:
 
 ```bash
-# 1. Operating System & File descriptors layers
-go run ./xmocks --file=xbridge/os.go --interface=IOSBridge --alias=OS --output=xbridge/mocks/
-go run ./xmocks --file=xbridge/file.go --interface=IFileBridge --alias=File --output=xbridge/mocks/
-go run ./xmocks --file=xbridge/fileinfo.go --interface=IFileInfoBridge --alias=FileInfo --output=xbridge/mocks/
+# 1. Camada de Sistema Operacional (bos)
+go run ./xmocks --file=xbridge/go/bos/os.go --interface=IOSBridge --alias=OS --output=xbridge/go/bos/mocks/
 
-# 2. Streams & Paths utilities
-go run ./xmocks --file=xbridge/ioe.go --interface=IIOBridge --alias=IO --output=xbridge/mocks/
-go run ./xmocks --file=xbridge/filepath.go --interface=IFilepathBridge --alias=Filepath --output=xbridge/mocks/
+# 2. Camada de Caminhos e Arquivos (bfilepath)
+go run ./xmocks --file=xbridge/go/bpath/bfilepath/filepath.go --interface=IFilepathBridge --alias=Filepath --output=xbridge/go/bpath/bfilepath/mocks/
 
-# 3. Platform Diagnostics
-go run ./xmocks --file=xbridge/runtime.go --interface=IRuntimeBridge --alias=Runtime --output=xbridge/mocks/
+# 3. Camada de Diagnósticos e Ambiente (bruntime)
+go run ./xmocks --file=xbridge/go/bruntime/runtime.go --interface=IRuntimeBridge --alias=Runtime --output=xbridge/go/bruntime/mocks/
+
+# 4. Camada de Stream de Dados (bio)
+go run ./xmocks --file=xbridge/go/bio/io.go --interface=IIOBridge --alias=IO --output=xbridge/go/bio/mocks/
+
+# 5. Camada Ocupada de Sistema de Arquivos Físicos (bio/bfs)
+go run ./xmocks --file=xbridge/go/bio/bfs/file.go --interface=IFileBridge --alias=File --output=xbridge/go/bio/bfs/mocks/
+go run ./xmocks --file=xbridge/go/bio/bfs/fileinfo.go --interface=IFileInfoBridge --alias=FileInfo --output=xbridge/go/bio/bfs/mocks/
 ```
 
 This creates a clean, independent subpackage under `xbridge/mocks/` with `package mocks` dynamically stamped at the top of each file, ready to be safely imported by external applications.

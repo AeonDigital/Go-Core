@@ -1,4 +1,4 @@
-package xbridge
+package bfilepath
 
 import (
 	"path/filepath"
@@ -186,6 +186,12 @@ type sfilepathBridge struct{}
 // Ensure at compile time that the private struct implements the public interface.
 var _ IFilepathBridge = sfilepathBridge{}
 
+// NewFilepathBridge creates and returns a public, mockable IFilepathBridge instance pointing
+// to the production filesystem path evaluation implementation.
+func NewFilepath() IFilepathBridge {
+	return sfilepathBridge{}
+}
+
 // =========================================================================
 // IMPLEMENTATION OF PATH MANIPULATION & CLEANING
 // =========================================================================
@@ -241,4 +247,4 @@ func (sfilepathBridge) VolumeName(path string) string { return filepath.VolumeNa
 // FilepathBridge is the global public variable used by all core application code
 // to perform cross-platform filesystem path evaluations and manipulations.
 // It can be easily hot-swapped at unit test boundaries via generated pkgxmock utilities.
-var FilepathBridge IFilepathBridge = sfilepathBridge{}
+var Filepath IFilepathBridge = NewFilepath()
