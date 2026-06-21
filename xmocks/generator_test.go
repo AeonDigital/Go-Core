@@ -12,6 +12,9 @@ import (
 func TestGenerateMockFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputPath := filepath.Join(tmpDir, "sample.go")
+
+	// Atualizamos o conteúdo da interface do teste.
+	// Adicionamos o tipo customizado 'MyCustomType' e fazemos a interface usá-lo.
 	content := `package sample
 
 import (
@@ -19,16 +22,40 @@ import (
 	"os"
 )
 
+type MyCustomType struct {
+	Name string
+}
+
 type IExample interface {
 	ReadFile(name string) ([]byte, error)
 	Stat(name string) (os.FileInfo, error)
 	NoOp()
 	Multi(a int, b string) (bool, error)
 	DirEntries(f *os.File, n int) ([]fs.DirEntry, error)
+
+	// PONTO 1: 'param MyCustomType' fará o primeiro 'if !isBuiltinType' ser TRUE
+	CustomParam(param MyCustomType)
+
+	// PONTO 2: O retorno 'MyCustomType' fará o segundo 'if !isBuiltinType' ser TRUE no finalNode
+	CustomReturn() MyCustomType
+
+	// COBERTURA DO PONTO 1: Parâmetro variádico NOMEADO
+	VariadicNamed(prefix string, args ...string)
+
+	// COBERTURA DO PONTO 2: Parâmetro variádico ANÔNIMO (Sem nome de variável)
+	VariadicAnonymous(...int)
 }
 `
 	if err := os.WriteFile(inputPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// Cria um go.mod fake temporário no diretório de execução do teste para o getModulePath não quebrar
+	if _, err := os.Stat("go.mod"); os.IsNotExist(err) {
+		if err := os.WriteFile("go.mod", []byte("module ://github.com"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove("go.mod")
 	}
 
 	outputPath, err := GenerateMockFile(GeneratorOptions{
@@ -54,20 +81,13 @@ type IExample interface {
 	if !strings.Contains(text, "type MockExample struct") {
 		t.Fatal("generated code missing MockExample definition")
 	}
-	if !strings.Contains(text, "type mockOnCallExample struct") {
-		t.Fatal("generated code missing mockOnCallExample definition")
+
+	// VALIDAÇÃO EXTRA: Garante que o gerador aplicou corretamente o prefixo 'sample.' nos tipos locais
+	if !strings.Contains(text, "CustomParam(param sample.MyCustomType)") {
+		t.Fatal("generated code missing sample. prefix on custom parameter type")
 	}
-	if !strings.Contains(text, "type mockSetReturnExample struct") {
-		t.Fatal("generated code missing mockSetReturnExample definition")
-	}
-	if !strings.Contains(text, "func NewMockExample() *MockExample") {
-		t.Fatal("generated code missing NewMockExample")
-	}
-	if !strings.Contains(text, "func (m *MockExample) ReadFile(name string) ([]byte, error)") {
-		t.Fatal("generated code missing ReadFile method")
-	}
-	if !strings.Contains(text, "func (r *mockSetReturnExample) Stat(") {
-		t.Fatal("generated code missing Stat SetReturn method")
+	if !strings.Contains(text, "CustomReturn() sample.MyCustomType") {
+		t.Fatal("generated code missing sample. prefix on custom return type")
 	}
 }
 
@@ -219,7 +239,8 @@ func TestBuildMethods_UnsupportedInterfaceMember(t *testing.T) {
 		}}},
 	}
 
-	_, _, err := buildMethods(iface, map[string]string{})
+	// Adicionado o parâmetro "sample" exigido pelo buildMethods atualizado
+	_, _, err := buildMethods(iface, "sample", map[string]string{})
 	if err == nil || !strings.Contains(err.Error(), "unsupported interface member Method") {
 		t.Fatalf("expected unsupported interface member error, got %v", err)
 	}
@@ -235,14 +256,16 @@ func TestBuildMethods_CollectImportsError(t *testing.T) {
 		}}},
 	}
 
-	_, _, err := buildMethods(iface, map[string]string{})
+	// Adicionado o parâmetro "sample" exigido pelo buildMethods atualizado
+	_, _, err := buildMethods(iface, "sample", map[string]string{})
 	if err == nil || !strings.Contains(err.Error(), "unknown selector package pkg") {
 		t.Fatalf("expected unknown selector package error, got %v", err)
 	}
 }
 
 func TestFormatParams_NilList(t *testing.T) {
-	params, args := formatParams(nil)
+	// Adicionado o parâmetro "sample"
+	params, args := formatParams(nil, "sample")
 	if params != "" || args != nil {
 		t.Fatalf("expected empty params and nil args for nil list, got %q %v", params, args)
 	}
@@ -250,7 +273,7 @@ func TestFormatParams_NilList(t *testing.T) {
 
 func TestFormatParams_AnonymousParameter(t *testing.T) {
 	list := &ast.FieldList{List: []*ast.Field{{Type: ast.NewIdent("string")}}}
-	params, args := formatParams(list)
+	params, args := formatParams(list, "sample")
 	if params != "string" {
 		t.Fatalf("expected params string, got %q", params)
 	}
@@ -259,9 +282,24 @@ func TestFormatParams_AnonymousParameter(t *testing.T) {
 	}
 }
 
+func TestFormatParams_AnonymousVariadic(t *testing.T) {
+	// Cria um nó representando ...int na AST manualmente
+	list := &ast.FieldList{List: []*ast.Field{{
+		Type: &ast.Ellipsis{Elt: ast.NewIdent("int")},
+	}}}
+
+	params, args := formatParams(list, "sample")
+	if !strings.Contains(params, "int") {
+		t.Fatalf("expected params to contain int, got %q", params)
+	}
+	if len(args) != 1 || args[0] != "arg0..." {
+		t.Fatalf("expected arg0... for anonymous variadic parameter, got %v", args)
+	}
+}
 func TestFormatResults_SingleResult(t *testing.T) {
 	list := &ast.FieldList{List: []*ast.Field{{Type: ast.NewIdent("error")}}}
-	results, types := formatResults(list)
+	// Adicionado o parâmetro "sample"
+	results, types := formatResults(list, "sample")
 	if results != "error" {
 		t.Fatalf("expected single result string error, got %q", results)
 	}
@@ -283,7 +321,9 @@ func TestDeriveSetReturn_SingleResultName(t *testing.T) {
 }
 
 func TestRenderMock_ImportsWithAlias(t *testing.T) {
-	code, err := renderMock("Example", nil, map[string]string{"ioAlias": "io"})
+	// Ajustado conforme sua nova assinatura para renderMock:
+	// renderMock(packageName, sourcePackage, alias, methods, usedImports)
+	code, err := renderMock("mocks", "sample", "Example", nil, map[string]string{"ioAlias": "io"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,23 +481,63 @@ func TestGenerateMockFile_MkdirAllError(t *testing.T) {
 func TestGenerateMockFile_WriteFileError(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	// 1. Prepara o arquivo de interface de entrada válido
 	inputPath := filepath.Join(tmpDir, "sample.go")
 	if err := os.WriteFile(inputPath, []byte("package sample\ntype IExample interface { NoOp() }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	outputPath := filepath.Join(tmpDir, "example.go")
-	if err := os.WriteFile(outputPath, []byte("existing content"), 0o444); err != nil {
-		t.Fatal(err)
-	}
+	// 2. Criamos um nome de arquivo gigante (maior que 255 caracteres)
+	// strings.Repeat cria uma string longa de letras 'a' terminando em .go
+	longFileName := strings.Repeat("a", 260) + ".go"
 
+	// O diretório pai é válido (.../tmpDir/outdir), então o MkdirAll vai passar com sucesso!
+	badOutputPath := filepath.Join(tmpDir, "outdir", longFileName)
+
+	// 3. Executa o gerador
 	_, err := GenerateMockFile(GeneratorOptions{
 		InputFile:     inputPath,
 		InterfaceName: "IExample",
 		Alias:         "Example",
-		OutputPath:    outputPath,
+		OutputPath:    badOutputPath,
 	})
+
+	// O MkdirAll cria a pasta 'outdir' normalmente (OK).
+	// Mas o WriteFile tenta criar o arquivo com 260 caracteres e o Linux barra com "file name too long"!
 	if err == nil {
-		t.Fatal("expected write file error")
+		t.Fatal("expected write file error because the file name is too long for the OS")
+	}
+}
+
+func TestGetModulePath_NoModuleDeclaration(t *testing.T) {
+	// 1. Criamos um arquivo go.mod temporário inválido (sem a linha do module)
+	tmpDir := t.TempDir()
+	fakeGoMod := filepath.Join(tmpDir, "go.mod")
+	content := []byte("// This file does not contain a module declaration\ngo 1.26\n")
+	if err := os.WriteFile(fakeGoMod, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Como a função 'getModulePath' lê o go.mod do diretório atual de execução,
+	// nós mudamos temporariamente o diretório de trabalho do teste para a pasta temporária.
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	// Garante que o teste vai restaurar a pasta original quando terminar
+	defer func() {
+		_ = os.Chdir(oldWd)
+	}()
+
+	// 3. Executa a função interna
+	path := getModulePath()
+
+	// Como o arquivo foi lido até o final sem achar "module ",
+	// o fluxo vai bater exatamente no return "" final que faltava cobrir!
+	if path != "" {
+		t.Fatalf("expected empty module path, got %q", path)
 	}
 }

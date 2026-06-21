@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"go/ast"
@@ -60,17 +61,23 @@ func GenerateMockFile(opts GeneratorOptions) (string, error) {
 		return "", err
 	}
 
-	methods, usedImports, err := buildMethods(iface, imports)
-	if err != nil {
-		return "", err
-	}
-
-	code, err := renderMock(opts.Alias, methods, usedImports)
+	methods, usedImports, err := buildMethods(iface, srcFile.Name.Name, imports)
 	if err != nil {
 		return "", err
 	}
 
 	outputPath, err := resolveOutputPath(opts.OutputPath, opts.Alias)
+	if err != nil {
+		return "", err
+	}
+
+	dirName := filepath.Base(filepath.Dir(outputPath))
+	packageName := "mocks"
+	if dirName != "." && dirName != "" {
+		packageName = dirName
+	}
+
+	code, err := renderMock(packageName, srcFile.Name.Name, opts.Alias, methods, usedImports)
 	if err != nil {
 		return "", err
 	}
@@ -140,7 +147,7 @@ func findInterface(file *ast.File, name string) (*ast.InterfaceType, error) {
 	return nil, fmt.Errorf("interface %s not found", name)
 }
 
-func buildMethods(iface *ast.InterfaceType, imports map[string]string) ([]MethodInfo, map[string]string, error) {
+func buildMethods(iface *ast.InterfaceType, sourcePackage string, imports map[string]string) ([]MethodInfo, map[string]string, error) {
 	methods := []MethodInfo{}
 	usedImports := map[string]string{}
 
@@ -158,11 +165,12 @@ func buildMethods(iface *ast.InterfaceType, imports map[string]string) ([]Method
 			return nil, nil, err
 		}
 
-		params, argNames := formatParams(funcType.Params)
-		results, resultTypes := formatResults(funcType.Results)
+		// A MÁGICA REVOLUCIONÁRIA: Passamos o sourcePackage para formatar os parâmetros e resultados
+		params, argNames := formatParams(funcType.Params, sourcePackage)
+		results, resultTypes := formatResults(funcType.Results, sourcePackage)
 		setReturnParams, returnArgs := deriveSetReturn(resultTypes)
 
-		funcTypeString := renderFuncType(funcType)
+		funcTypeString := renderFuncType(funcType, sourcePackage)
 		methods = append(methods, MethodInfo{
 			Name:             methodName,
 			SignatureParams:  params,
@@ -199,7 +207,7 @@ func collectImports(expr ast.Node, imports map[string]string, used map[string]st
 	return foundErr
 }
 
-func formatParams(list *ast.FieldList) (string, []string) {
+func formatParams(list *ast.FieldList, sourcePackage string) (string, []string) {
 	if list == nil {
 		return "", nil
 	}
@@ -208,10 +216,17 @@ func formatParams(list *ast.FieldList) (string, []string) {
 	args := []string{}
 	index := 0
 	for _, field := range list.List {
-		typeStr := nodeString(field.Type)
+		typeStr := nodeString(field.Type, sourcePackage)
+
+		// Verifica se o parâmetro original é variádico (ex: ...string)
+		isVariadic := strings.HasPrefix(typeStr, "...")
+
 		if len(field.Names) == 0 {
 			parts = append(parts, typeStr)
 			argName := fmt.Sprintf("arg%d", index)
+			if isVariadic {
+				argName += "..."
+			}
 			args = append(args, argName)
 			index++
 			continue
@@ -219,7 +234,11 @@ func formatParams(list *ast.FieldList) (string, []string) {
 		names := []string{}
 		for _, name := range field.Names {
 			names = append(names, name.Name)
-			args = append(args, name.Name)
+			argName := name.Name
+			if isVariadic {
+				argName += "..."
+			}
+			args = append(args, argName)
 			index++
 		}
 		parts = append(parts, fmt.Sprintf("%s %s", strings.Join(names, ", "), typeStr))
@@ -227,7 +246,7 @@ func formatParams(list *ast.FieldList) (string, []string) {
 	return strings.Join(parts, ", "), args
 }
 
-func formatResults(list *ast.FieldList) (string, []string) {
+func formatResults(list *ast.FieldList, sourcePackage string) (string, []string) {
 	if list == nil {
 		return "", nil
 	}
@@ -235,7 +254,7 @@ func formatResults(list *ast.FieldList) (string, []string) {
 	parts := []string{}
 	resultTypes := []string{}
 	for _, field := range list.List {
-		typeStr := nodeString(field.Type)
+		typeStr := nodeString(field.Type, sourcePackage)
 		resultTypes = append(resultTypes, typeStr)
 		if len(list.List) == 1 {
 			parts = append(parts, typeStr)
@@ -275,27 +294,108 @@ func deriveSetReturn(resultTypes []string) (string, string) {
 	return strings.Join(parts, ", "), strings.Join(vars, ", ")
 }
 
-func renderFuncType(funcType *ast.FuncType) string {
-	params, _ := formatParams(funcType.Params)
-	results, _ := formatResults(funcType.Results)
+func renderFuncType(funcType *ast.FuncType, sourcePackage string) string {
+	params, _ := formatParams(funcType.Params, sourcePackage)
+	results, _ := formatResults(funcType.Results, sourcePackage)
 	if results == "" {
 		return fmt.Sprintf("func(%s)", params)
 	}
 	return fmt.Sprintf("func(%s) %s", params, results)
 }
 
-func nodeString(node ast.Node) string {
+func nodeString(node ast.Node, sourcePackage string) string {
+	var finalNode ast.Node = node
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		if ident, ok := n.(*ast.Ident); ok {
+			if !isBuiltinType(ident.Name) {
+				if node == ident {
+					finalNode = &ast.SelectorExpr{
+						X:   ast.NewIdent(sourcePackage),
+						Sel: ident,
+					}
+				} else {
+					_ = ident.Name
+				}
+			}
+		}
+		return true
+	})
+
+	if ident, ok := node.(*ast.Ident); ok {
+		if !isBuiltinType(ident.Name) {
+			finalNode = &ast.SelectorExpr{
+				X:   ast.NewIdent(sourcePackage),
+				Sel: ident,
+			}
+		}
+	}
+
 	var buf bytes.Buffer
-	_ = printer.Fprint(&buf, token.NewFileSet(), node)
+	_ = printer.Fprint(&buf, token.NewFileSet(), finalNode)
 	return buf.String()
 }
 
-func renderMock(alias string, methods []MethodInfo, usedImports map[string]string) ([]byte, error) {
+func isBuiltinType(name string) bool {
+	builtins := map[string]bool{
+		"string": true, "error": true, "int": true, "int64": true, "int32": true,
+		"uint": true, "uint64": true, "uint32": true, "bool": true, "byte": true,
+		"rune": true, "float64": true, "float32": true, "uintptr": true, "any": true,
+	}
+	return builtins[name]
+}
+
+func getModulePath() string {
+	file, err := os.Open("go.mod")
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module"))
+		}
+	}
+	scanner.Err()
+
+	return ""
+}
+
+func renderMock(
+	packageName string,
+	sourcePackage string,
+	alias string,
+	methods []MethodInfo,
+	usedImports map[string]string,
+) ([]byte, error) {
 	imports := map[string]string{}
 	imports["fmt"] = "fmt"
 	imports["runtime"] = "runtime"
 	for aliasName, importPath := range usedImports {
 		imports[aliasName] = importPath
+	}
+
+	if packageName != sourcePackage {
+		modPath := getModulePath()
+		if modPath != "" {
+
+			needParentImport := false
+			for _, method := range methods {
+				if strings.Contains(method.SignatureParams, sourcePackage+".") ||
+					strings.Contains(method.SignatureResults, sourcePackage+".") ||
+					strings.Contains(method.FuncFieldType, sourcePackage+".") {
+					needParentImport = true
+					break
+				}
+			}
+
+			if needParentImport {
+				imports[sourcePackage] = modPath + "/" + sourcePackage
+			}
+		}
 	}
 
 	importLines := []string{}
@@ -310,7 +410,7 @@ func renderMock(alias string, methods []MethodInfo, usedImports map[string]strin
 
 	var buf strings.Builder
 	buf.WriteString("// Code generated by xmocks; DO NOT EDIT.\n")
-	buf.WriteString("package pkgxmock\n\n")
+	buf.WriteString(fmt.Sprintf("package %s\n\n", packageName))
 	buf.WriteString("import (\n")
 	for _, line := range importLines {
 		buf.WriteString(line)
@@ -361,14 +461,14 @@ func renderMock(alias string, methods []MethodInfo, usedImports map[string]strin
 	buf.WriteString("}\n\n")
 
 	for _, method := range methods {
-		buf.WriteString(fmt.Sprintf("func (m *Mock%s) %s(%s) %s {\n", alias, method.Name, method.SignatureParams, method.SignatureResults))
-		buf.WriteString(fmt.Sprintf("\tif m.%sFunc == nil {\n", method.Name))
-		buf.WriteString("\t\tm.panicIfNotConfigured()\n")
-		buf.WriteString("\t}\n")
+		buf.WriteString(fmt.Sprintf("func (oMock *Mock%s) %s(%s) %s {\n", alias, method.Name, method.SignatureParams, method.SignatureResults))
+		buf.WriteString(fmt.Sprintf("\tif oMock.%sFunc == nil {\n", method.Name))
+		buf.WriteString("\t\toMock.panicIfNotConfigured()\n")
+		buf.WriteString("}\n")
 		if method.SignatureResults == "" {
-			buf.WriteString(fmt.Sprintf("\t m.%sFunc(%s)\n", method.Name, method.CallArguments))
+			buf.WriteString(fmt.Sprintf("\t oMock.%sFunc(%s)\n", method.Name, method.CallArguments))
 		} else {
-			buf.WriteString(fmt.Sprintf("\treturn m.%sFunc(%s)\n", method.Name, method.CallArguments))
+			buf.WriteString(fmt.Sprintf("\treturn oMock.%sFunc(%s)\n", method.Name, method.CallArguments))
 		}
 		buf.WriteString("}\n\n")
 	}
