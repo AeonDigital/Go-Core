@@ -1,4 +1,4 @@
-package xio
+package xcli
 
 import (
 	"fmt"

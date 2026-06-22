@@ -1,4 +1,4 @@
-package xio_test
+package xcli_test
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AeonDigital/Go-Core/xio"
+	"github.com/AeonDigital/Go-Core/xcli"
 )
 
 // TestPrint verifies that messages are correctly written to standard output.
@@ -21,10 +21,10 @@ func TestPrint(t *testing.T) {
 	os.Stdout = w
 
 	// 2. Execute the function with a single message (behaves like Println)
-	xio.Print("hello world")
+	xcli.Print("hello world")
 
 	// 3. Execute the function with arguments (behaves like Printf + \n)
-	xio.Print("user %s has id %d", "john", 42)
+	xcli.Print("user %s has id %d", "john", 42)
 
 	// Close the writer so we can read from the pipe
 	w.Close()

@@ -1,7 +1,7 @@
-xio
+xcli
 ================================
 
-> CLI helper utilities for IO operations in command-line tools.
+> CLI helper utilities for command-line tools.
 
 &nbsp;
 
@@ -14,7 +14,7 @@ ________________________________________________________________________________
 
 ## Purpose
 
-`xio` is designed to collect simple CLI-oriented IO utilities in one place.
+`xcli` is designed to collect simple CLI-oriented IO utilities in one place.
 It currently focuses on printing consistent output to standard output with a
 minimal API, while leaving space for future CLI helpers.
 
@@ -29,13 +29,13 @@ ________________________________________________________________________________
 Use `go get` to install the package:
 
 ```shell
-  go get github.com/AeonDigital/Go-Core/xio@latest
+  go get github.com/AeonDigital/Go-Core/xcli@latest
 ```
 
 Import it in your code:
 
 ```go
-import "github.com/AeonDigital/Go-Core/xio"
+import "github.com/AeonDigital/Go-Core/xcli"
 ```
 
 
@@ -46,13 +46,13 @@ ________________________________________________________________________________
 Print a simple line to standard output:
 
 ```go
-xio.Print("hello world")
+xcli.Print("hello world")
 ```
 
 Use formatted output with arguments:
 
 ```go
-xio.Print("user %s has id %d", "john", 42)
+xcli.Print("user %s has id %d", "john", 42)
 ```
 
 The function behaves like `fmt.Println` when no format arguments are provided,
@@ -65,7 +65,7 @@ ________________________________________________________________________________
 
 Currently the package exposes:
 
-* `xio.Print(message string, args ...any)`
+* `xcli.Print(message string, args ...any)`
 
 This function is intended to provide predictable CLI output behavior while
 keeping the API surface small.
@@ -75,7 +75,7 @@ ________________________________________________________________________________
 
 ## External dependencies
 
-`xio` depends only on the Go standard library:
+`xcli` depends only on the Go standard library:
 
 * `fmt`
 * `io`
