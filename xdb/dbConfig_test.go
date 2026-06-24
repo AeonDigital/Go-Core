@@ -174,13 +174,15 @@ func TestCheckConfiguration(t *testing.T) {
 
 // TestInitDataBaseConnection testa o fluxo de sucesso e as ramificações de erro.
 func TestInitDataBaseConnection(t *testing.T) {
+	ctx := context.Background()
+
 	t.Run("Erro no sql.Open se o driver for invalido", func(t *testing.T) {
 		cfg := xdb.DBConfig{
 			Driver: "driver_invalido_para_forcar_erro",
 			DSN:    ":memory:",
 		}
 
-		err := cfg.InitDataBaseConnection()
+		err := cfg.InitDataBaseConnection(ctx)
 		if err == nil {
 			t.Error("esperava erro ao abrir conexao com driver invalido")
 		}
@@ -191,11 +193,11 @@ func TestInitDataBaseConnection(t *testing.T) {
 			Driver: "sqlite",
 			DSN:    ":memory:",
 			SQLite: xdb.SQLiteConfig{
-				Pragma: nil, // Força a ramificacao 'if o.SQLite.Pragma == nil'
+				Pragma: nil,
 			},
 		}
 
-		err := cfg.InitDataBaseConnection()
+		err := cfg.InitDataBaseConnection(ctx)
 		if err != nil {
 			t.Fatalf("erro inesperado: %v", err)
 		}
@@ -215,13 +217,12 @@ func TestInitDataBaseConnection(t *testing.T) {
 			DSN:    ":memory:",
 			SQLite: xdb.SQLiteConfig{
 				Pragma: map[string]string{
-					// Injeta uma quebra de sintaxe SQL para forçar o erro no db.Exec
 					"journal_mode": "WAL; CREATE TABLE );",
 				},
 			},
 		}
 
-		err := cfg.InitDataBaseConnection()
+		err := cfg.InitDataBaseConnection(ctx)
 		if err == nil {
 			if cfg.DB != nil {
 				cfg.DB.Close()
@@ -231,8 +232,6 @@ func TestInitDataBaseConnection(t *testing.T) {
 	})
 
 	t.Run("Erro no PingContext simulado por driver mock", func(t *testing.T) {
-		// Passamos o nosso driver customizado que aceita todos os PRAGMAs,
-		// mas falha miseravelmente apenas no handshake do Ping!
 		cfg := xdb.DBConfig{
 			Driver: "sqlite_mock_ping_error",
 			DSN:    ":memory:",
@@ -243,7 +242,7 @@ func TestInitDataBaseConnection(t *testing.T) {
 			},
 		}
 
-		err := cfg.InitDataBaseConnection()
+		err := cfg.InitDataBaseConnection(ctx)
 		if err == nil {
 			if cfg.DB != nil {
 				cfg.DB.Close()
@@ -251,16 +250,16 @@ func TestInitDataBaseConnection(t *testing.T) {
 			t.Error("esperava erro no ping do banco")
 		}
 
-		if err != nil && !strings.Contains(err.Error(), "erro forcado de ping para cobertura") {
+		if err != nil && !strings.Contains(err.Error(), "liveness ping execution timeout boundary breached") {
 			t.Errorf("recebeu um erro diferente do esperado: %v", err)
 		}
 	})
 }
 
-// TestRunMigrations valida o fluxo de migrações em ordem alfabética e erros de diretório.
 // TestRunMigrations valida todas as ramificações de erro e fluxos lógicos de migração.
 func TestRunMigrations(t *testing.T) {
-	// Base de sucesso comum para reaproveitar nos subtestes que precisam de um banco ativo
+	ctx := context.Background()
+
 	newMockDB := func(t *testing.T) *sql.DB {
 		db, err := sql.Open("sqlite", ":memory:")
 		if err != nil {
@@ -271,8 +270,8 @@ func TestRunMigrations(t *testing.T) {
 
 	t.Run("Erro se DB for nil", func(t *testing.T) {
 		cfg := xdb.DBConfig{MigrationsDirPath: "./migrations"}
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "database instance is nil") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "nil pointer value not allowed") {
 			t.Errorf("esperava erro de banco nil, recebeu: %v", err)
 		}
 	})
@@ -283,11 +282,11 @@ func TestRunMigrations(t *testing.T) {
 
 		cfg := xdb.DBConfig{
 			DB:                db,
-			MigrationsDirPath: "   ", // Força o trim a resultar em string vazia
+			MigrationsDirPath: "   ",
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "migrations directory path is empty") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "empty string value not allowed") {
 			t.Errorf("esperava erro de diretorio vazio, recebeu: %v", err)
 		}
 	})
@@ -304,11 +303,11 @@ func TestRunMigrations(t *testing.T) {
 
 		cfg := xdb.DBConfig{
 			DB:                db,
-			MigrationsDirPath: filePath, // Passa um arquivo no lugar do diretorio
+			MigrationsDirPath: filePath,
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "provided path is a file, not a directory") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "type mismatch restriction violated") {
 			t.Errorf("esperava erro de caminho sendo arquivo, recebeu: %v", err)
 		}
 	})
@@ -322,18 +321,18 @@ func TestRunMigrations(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		permDir := filepath.Join(tmpDir, "no_read_dir")
-		if err := os.Mkdir(permDir, 0000); err != nil { // Sem nenhuma permissao de leitura (0000)
+		if err := os.Mkdir(permDir, 0000); err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = os.Chmod(permDir, 0755) }() // Restaura para permitir limpeza automática
+		defer func() { _ = os.Chmod(permDir, 0755) }()
 
 		cfg := xdb.DBConfig{
 			DB:                db,
 			MigrationsDirPath: permDir,
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "failed to read migrations directory") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "target resource currently unavailable") {
 			t.Errorf("esperava erro ao ler diretorio protegido, recebeu: %v", err)
 		}
 	})
@@ -342,14 +341,14 @@ func TestRunMigrations(t *testing.T) {
 		db := newMockDB(t)
 		defer db.Close()
 
-		tmpDir := t.TempDir() // Diretorio completamente vazio, sem arquivos .sql
+		tmpDir := t.TempDir()
 
 		cfg := xdb.DBConfig{
 			DB:                db,
 			MigrationsDirPath: tmpDir,
 		}
 
-		err := cfg.RunMigrations()
+		err := cfg.RunMigrations(ctx)
 		if err != nil {
 			t.Errorf("nao esperava erro quando len(migrationFiles) == 0, recebeu: %v", err)
 		}
@@ -359,20 +358,11 @@ func TestRunMigrations(t *testing.T) {
 		db := newMockDB(t)
 		defer db.Close()
 
-		// O modernc.org/sqlite ou os.ReadDir não travam a leitura subsequente se removermos a permissão
-		// do arquivo individual após a listagem em alguns ambientes. Para forçar com 100% de certeza
-		// o erro de os.ReadFile sem depender de concorrência impura, podemos usar um truque de nome de arquivo
-		// que passe na validação do ReadDir, mas falhe na leitura real do sistema de arquivos, ou simplesmente
-		// simular um link simbólico quebrado.
 		tmpDir := t.TempDir()
 
-		// Criando um link simbólico quebrado que termina com .sql
-		// os.ReadDir lê a entrada perfeitamente, mas os.ReadFile tenta seguir o link inexistente e estoura o erro!
 		targetInexistente := filepath.Join(tmpDir, "nao_existo.sql")
 		symlinkPath := filepath.Join(tmpDir, "01_broken_link.sql")
 		if err := os.Symlink(targetInexistente, symlinkPath); err != nil {
-			// Fallback alternativo caso o sistema operacional (ex: Windows sem modo desenvolvedor) proiba symlinks
-			// Removemos a permissao total do arquivo
 			if err := os.WriteFile(symlinkPath, []byte("SELECT 1;"), 0000); err != nil {
 				t.Fatal(err)
 			}
@@ -384,8 +374,8 @@ func TestRunMigrations(t *testing.T) {
 			MigrationsDirPath: tmpDir,
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "failed to read migration file") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "target resource is corrupted") {
 			t.Errorf("esperava erro de leitura do arquivo individual, recebeu: %v", err)
 		}
 	})
@@ -396,11 +386,9 @@ func TestRunMigrations(t *testing.T) {
 
 		tmpDir := t.TempDir()
 
-		// 01 está totalmente vazio, deve ativar o branch 'continue'
 		if err := os.WriteFile(filepath.Join(tmpDir, "01_empty.sql"), []byte("   \n   "), 0644); err != nil {
 			t.Fatal(err)
 		}
-		// 02 possui comando legítimo para garantir que o fluxo continuou com sucesso após o continue
 		if err := os.WriteFile(filepath.Join(tmpDir, "02_valid.sql"), []byte("CREATE TABLE logs (id INT);"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -410,12 +398,11 @@ func TestRunMigrations(t *testing.T) {
 			MigrationsDirPath: tmpDir,
 		}
 
-		err := cfg.RunMigrations()
+		err := cfg.RunMigrations(ctx)
 		if err != nil {
 			t.Fatalf("nao esperava erro ao processar migracao vazia com continue, recebeu: %v", err)
 		}
 
-		// Garante que o 02_valid rodou após o 01_empty ter sido ignorado pelo continue
 		_, err = db.Exec("INSERT INTO logs (id) VALUES (1);")
 		if err != nil {
 			t.Errorf("tabela logs deveria ter sido criada, indicando que o continue funcionou: %v", err)
@@ -427,8 +414,6 @@ func TestRunMigrations(t *testing.T) {
 		defer db.Close()
 
 		tmpDir := t.TempDir()
-
-		// Uma instrução truncada e sem sentido faz o parser do SQLite falhar de imediato
 		sqlInvalido := "INSERT INTO;"
 
 		if err := os.WriteFile(filepath.Join(tmpDir, "01_broken.sql"), []byte(sqlInvalido), 0644); err != nil {
@@ -440,8 +425,8 @@ func TestRunMigrations(t *testing.T) {
 			MigrationsDirPath: tmpDir,
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "failed to execute migration file") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "failed transaction command context lifecycle validation execution block") {
 			t.Errorf("esperava erro de execucao de script SQL invalido, recebeu: %v", err)
 		}
 	})
@@ -450,17 +435,16 @@ func TestRunMigrations(t *testing.T) {
 		db := newMockDB(t)
 		defer db.Close()
 
-		// Criamos um caminho teoricamente valido dentro do TempDir, mas sem criar a pasta fisicamente
 		tmpDir := t.TempDir()
 		caminhoInexistente := filepath.Join(tmpDir, "pasta_totalmente_fantasma_123")
 
 		cfg := xdb.DBConfig{
 			DB:                db,
-			MigrationsDirPath: caminhoInexistente, // Dispara o os.IsNotExist(err)
+			MigrationsDirPath: caminhoInexistente,
 		}
 
-		err := cfg.RunMigrations()
-		if err == nil || !strings.Contains(err.Error(), "migrations directory does not exist") {
+		err := cfg.RunMigrations(ctx)
+		if err == nil || !strings.Contains(err.Error(), "target system resource or path not found") {
 			t.Errorf("esperava erro de diretorio inexistente, recebeu: %v", err)
 		}
 	})

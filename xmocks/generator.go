@@ -165,7 +165,6 @@ func buildMethods(iface *ast.InterfaceType, sourcePackage string, imports map[st
 			return nil, nil, err
 		}
 
-		// A MÁGICA REVOLUCIONÁRIA: Passamos o sourcePackage para formatar os parâmetros e resultados
 		params, argNames := formatParams(funcType.Params, sourcePackage)
 		results, resultTypes := formatResults(funcType.Results, sourcePackage)
 		setReturnParams, returnArgs := deriveSetReturn(resultTypes)

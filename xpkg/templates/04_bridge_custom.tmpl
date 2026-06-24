@@ -1,0 +1,38 @@
+package {{.PkgName}}
+
+/*
+  ARCHITECTURE & SCOPE LIMITATION:
+  04_bridge_{{.ResourceLower}}.go isolates structural interfaces mimicking downstream or external {{.ResourceLower}} dependencies.
+  It permits hot-swapping third-party systems with lightweight mock structures during test boundaries.
+
+  Design Constraints:
+  - Public interfaces MUST use the 'I' prefix and the 'Bridge' suffix (e.g., {{.InterfaceName}}).
+  - Concrete implementations MUST be private structures with the 'Bridge' suffix (e.g., {{.StructName}}).
+  - Always enforce a compile-time interface implementation check via an anonymous blank identifier variable.
+*/
+
+// {{.InterfaceName}} defines the mockable contract for the external {{.ResourceLower}} dependency.
+type {{.InterfaceName}} interface {
+  // Execute performs a mockable operations against the bridged provider.
+  Execute() error
+}
+
+// {{.StructName}} acts as the private concrete production driver routing requests natively.
+type {{.StructName}} struct{}
+
+// Compile-time assertion ensuring the concrete implementation strictly satisfies the interface contract.
+var _ {{.InterfaceName}} = {{.StructName}}{}
+
+// {{.FactoryName}} instantiates a production-ready implementation of the bridge.
+func {{.FactoryName}}() {{.InterfaceName}} {
+  return {{.StructName}}{}
+}
+
+func ({{.StructName}}) Execute() error {
+  // Production logic implementation goes here
+  return nil
+}
+
+// {{.VariableName}} is the global public variable used by all core application code
+// to perform operations. It can be easily hot-swapped at unit test boundaries.
+var {{.VariableName}} {{.InterfaceName}} = {{.FactoryName}}()

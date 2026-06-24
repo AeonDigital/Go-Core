@@ -24,25 +24,6 @@ type SQLExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// SQLiteConfig aggregates dedicated attributes and behavior modifiers needed to shape SQLite behavior.
-type SQLiteConfig struct {
-	Mode        string            `json:"mode"`
-	Dir         string            `json:"dir"`
-	FileName    string            `json:"fileName"`
-	QueryString string            `json:"querystring"`
-	Pragma      map[string]string `json:"pragma"`
-}
-
-// RowScanner defines the function signature required to map database columns into a structured type.
-type RowScanner[R any] func(rows *sql.Rows) (R, error)
-
-// CustomQuery decouples raw SQL execution from rigid models by bundling the query statement, its runtime parameters, and its mapping logic.
-type CustomQuery[R any] struct {
-	SQL     string
-	Args    []any
-	Scanner RowScanner[R]
-}
-
 // Entity establishes the mandatory domain lifecycle methods required for automatic CRUD operations.
 type Entity interface {
 	// Normalize cleanses and standardizes internal field values before processing (e.g., trimming whitespace or altering casing).
@@ -77,4 +58,14 @@ type Entity interface {
 
 	// IsNaturalPK indicates whether the entity primary key is a natural identifier supplied from an external context outside the system.
 	IsNaturalPK() bool
+}
+
+// RowScanner defines the function signature required to map database columns into a structured type.
+type RowScanner[R any] func(rows *sql.Rows) (R, error)
+
+// CustomQuery decouples raw SQL execution from rigid models by bundling the query statement, its runtime parameters, and its mapping logic.
+type CustomQuery[R any] struct {
+	SQL     string
+	Args    []any
+	Scanner RowScanner[R]
 }

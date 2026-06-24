@@ -1,0 +1,19 @@
+package {{.PkgName}}
+
+/*
+  ARCHITECTURE & SCOPE LIMITATION:
+  05_private_test.go acts as the "test buddy" file. It uses the package nickname "package {{.PkgName}}"
+  but carries the "_test.go" suffix. This guarantees it is completely compiled out of production
+  builds, existing exclusively during "go test" routines.
+
+  Purpose:
+  It acts as a secure access gateway, exposing private fields, unexported variables, or internal
+  state mechanics to external test boundaries (package {{.PkgName}}_test) to ensure 100% test coverage.
+
+  Design Constraints:
+  - Do not put actual test logic (func Test...) here. Keep tests inside separate "*_test.go" files.
+  - Only export elements that are strictly required to bridge the gap into private scopes.
+*/
+
+// ExportInternalVariable allows black-box tests to read package-private states.
+// var ExportInternalVariable = privateVariable

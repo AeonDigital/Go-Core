@@ -319,8 +319,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.XERR_REPO_INSERT_HAS_NUMERICAL_PK {
-			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_HAS_NUMERICAL_PK, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_NUMERIC_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_NUMERIC_PK, errCode)
 		}
 	})
 
@@ -333,8 +333,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.XERR_REPO_INSERT_HAS_STRING_PK {
-			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_HAS_STRING_PK, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_STRING_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_STRING_PK, errCode)
 		}
 	})
 
@@ -347,8 +347,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.XERR_REPO_INSERT_NATURAL_PK_EMPTY {
-			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_NATURAL_PK_EMPTY, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_EMPTY_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_EMPTY_PK, errCode)
 		}
 	})
 
@@ -361,8 +361,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := repo.Insert(ctx, user)
-		if errCode != xdb.XERR_REPO_INSERT_NATURAL_PK_NIL {
-			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_NATURAL_PK_NIL, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_NIL_PK {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_WITH_UNEXPECTED_NIL_PK, errCode)
 		}
 	})
 
@@ -394,8 +394,8 @@ func TestDBGeneric_Insert(t *testing.T) {
 		}
 
 		errCode := deadRepo.Insert(ctx, user)
-		if errCode != xdb.XERR_REPO_INSERT_EXEC_FAILED {
-			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_EXEC_FAILED, errCode)
+		if errCode != xdb.XERR_REPO_INSERT_EXECUTION_FAILED {
+			t.Errorf("expected %s, got %s", xdb.XERR_REPO_INSERT_EXECUTION_FAILED, errCode)
 		}
 	})
 

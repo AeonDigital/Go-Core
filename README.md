@@ -55,12 +55,20 @@ Configuration management with support for multiple formats and sources.
 * **Features:** Multi-parser composition, environment variables, `.env`, JSON, YAML support.
 * **Import path:** `github.com/AeonDigital/Go-Core/xconfig`
 
+
+&nbsp;
+
+
 ### xdb
 
 Type-safe generic repository pattern for database CRUD operations with transaction and idempotency support.
 
 * **Features:** Generic CRUD operations, transaction support, idempotent updates/deletes, Entity interface, domain validation.
 * **Import path:** `github.com/AeonDigital/Go-Core/xdb`
+
+
+&nbsp;
+
 
 ### xerrors
 
@@ -69,12 +77,20 @@ Structured error classification and logging with corporate formatting.
 * **Features:** Domain-specific error codes, component tracing, structured debug output, slog integration.
 * **Import path:** `github.com/AeonDigital/Go-Core/xerrors`
 
+
+&nbsp;
+
+
 ### xfs
 
 Cross-platform filesystem utilities with testable boundary isolation.
 
 * **Features:** Path resolution, file/directory operations, permissions, standard user directories.
 * **Import path:** `github.com/AeonDigital/Go-Core/xfs`
+
+
+&nbsp;
+
 
 ### xio
 
@@ -83,12 +99,20 @@ CLI input/output helper utilities.
 * **Features:** Standard output formatting with predictable line breaks.
 * **Import path:** `github.com/AeonDigital/Go-Core/xio`
 
+
+&nbsp;
+
+
 ### xjson
 
 JSON manipulation and debugging helpers.
 
 * **Features:** Debug JSON serialization (`Dump`), human-readable output.
 * **Import path:** `github.com/AeonDigital/Go-Core/xjson`
+
+
+&nbsp;
+
 
 ### xlog
 
@@ -97,12 +121,18 @@ Logging framework with CLI and file registry support.
 * **Features:** Structured slog handler, ANSI colors, log file registry, timezone support.
 * **Import path:** `github.com/AeonDigital/Go-Core/xlog`
 
+&nbsp;
+&nbsp;
+
 ### xmocks
 
 Mock generation utilities for testing.
 
 * **Features:** Test data generation, mock scaffolding tools.
 * **Import path:** `github.com/AeonDigital/Go-Core/xmocks`
+
+&nbsp;
+&nbsp;
 
 ### xreflect
 
@@ -111,6 +141,9 @@ Reflection helpers for runtime type operations.
 * **Features:** Generic instance allocation, dynamic type initialization.
 * **Import path:** `github.com/AeonDigital/Go-Core/xreflect`
 
+&nbsp;
+&nbsp;
+
 ### xtime
 
 DateTime formatting and utilities.
@@ -118,12 +151,18 @@ DateTime formatting and utilities.
 * **Features:** Universal layout translation to Go reference format, common datetime helpers.
 * **Import path:** `github.com/AeonDigital/Go-Core/xtime`
 
+&nbsp;
+&nbsp;
+
 ### xunits
 
 Custom types for units of magnitude.
 
 * **Features:** Human-readable bytes (`Bytes`), extended durations (`TimeDuration`), JSON support.
 * **Import path:** `github.com/AeonDigital/Go-Core/xunits`
+
+&nbsp;
+&nbsp;
 
 ### tools
 

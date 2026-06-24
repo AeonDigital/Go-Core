@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AeonDigital/Go-Core/xerrors"
 	_ "modernc.org/sqlite"
 )
 
@@ -24,6 +25,15 @@ type DBConfig struct {
 	SQLite                SQLiteConfig  `json:"sqlite"`
 
 	DB *sql.DB
+}
+
+// SQLiteConfig aggregates dedicated attributes and behavior modifiers needed to shape SQLite behavior.
+type SQLiteConfig struct {
+	Mode        string            `json:"mode"`
+	Dir         string            `json:"dir"`
+	FileName    string            `json:"fileName"`
+	QueryString string            `json:"querystring"`
+	Pragma      map[string]string `json:"pragma"`
 }
 
 // NewDBConfig instantiates a baseline operational configuration setup with optimized defaults for embedded deployments.
@@ -117,10 +127,19 @@ func (o *DBConfig) CheckConfiguration() error {
 }
 
 // InitDataBaseConnection activates database interface structures and applies custom engine tuning options safely.
-func (o *DBConfig) InitDataBaseConnection() error {
+func (o *DBConfig) InitDataBaseConnection(ctx context.Context) error {
 	db, err := sql.Open(o.Driver, o.DSN)
 	if err != nil {
-		return err
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			XERR_CONNECTION_FAILED,
+			err,
+			"",
+			"",
+		).WithArgs(
+			o.Driver,
+			"failed to open channel wrapper",
+		)
 	}
 
 	db.SetMaxOpenConns(o.MaxOpenConnections)
@@ -147,17 +166,35 @@ func (o *DBConfig) InitDataBaseConnection() error {
 
 		for key, value := range o.SQLite.Pragma {
 			query := fmt.Sprintf("PRAGMA %s = %s;", key, value)
-			if _, err := db.Exec(query); err != nil {
+			if _, err := db.ExecContext(ctx, query); err != nil {
 				db.Close()
-				return err
+				return xerrors.NewError500(
+					XERR_PKGCTX,
+					XERR_ENGINE_CONFIG_FAILED,
+					err,
+					"",
+					"",
+				).WithArgs(
+					key,
+					fmt.Sprintf("failed payload query expression: %s", query),
+				)
 			}
 		}
 
-		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if err := db.PingContext(pingCtx); err != nil {
 			db.Close()
-			return err
+			return xerrors.NewError500(
+				XERR_PKGCTX,
+				XERR_CONNECTION_FAILED,
+				err,
+				"",
+				"",
+			).WithArgs(
+				o.DSN,
+				"liveness ping execution timeout boundary breached",
+			)
 		}
 	}
 
@@ -166,27 +203,70 @@ func (o *DBConfig) InitDataBaseConnection() error {
 }
 
 // RunMigrations processes organized script collections chronologically against target database environments.
-func (o *DBConfig) RunMigrations() error {
+func (o *DBConfig) RunMigrations(ctx context.Context) error {
 	if o.DB == nil {
-		return fmt.Errorf("database instance is nil")
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			xerrors.XERR_NIL_NOT_ALLOWED,
+			nil,
+			"",
+			"",
+		).WithArgs(
+			"DB",
+		)
 	}
 
 	dirPath := strings.TrimSpace(o.MigrationsDirPath)
 	if dirPath == "" {
-		return fmt.Errorf("migrations directory path is empty")
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			xerrors.XERR_EMPTY_NOT_ALLOWED,
+			nil,
+			"",
+			"",
+		).WithArgs(
+			"MigrationsDirPath",
+		)
 	}
 
 	dirInfo, err := os.Stat(dirPath)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("migrations directory does not exist: %s", dirPath)
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			xerrors.XERR_RESOURCE_NOT_FOUND,
+			err,
+			"",
+			"",
+		).WithArgs(
+			"MigrationsDirPath",
+			dirPath,
+		)
 	}
 	if !dirInfo.IsDir() {
-		return fmt.Errorf("provided path is a file, not a directory: %s", dirPath)
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			xerrors.XERR_INVALID_TYPE,
+			nil,
+			"",
+			"",
+		).WithArgs(
+			"MigrationsDirPath",
+			fmt.Sprintf("path points to structural file instead of directory: %s", dirPath),
+		)
 	}
 
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return fmt.Errorf("failed to read migrations directory: %w", err)
+		return xerrors.NewError500(
+			XERR_PKGCTX,
+			xerrors.XERR_RESOURCE_UNAVAILABLE,
+			err,
+			"",
+			"",
+		).WithArgs(
+			dirPath,
+			"unreadable system directory descriptors descriptor slice",
+		)
 	}
 
 	var migrationFiles []string
@@ -207,7 +287,16 @@ func (o *DBConfig) RunMigrations() error {
 
 		scriptBytes, err := os.ReadFile(fullFilePath)
 		if err != nil {
-			return fmt.Errorf("failed to read migration file [%s]: %w", fileName, err)
+			return xerrors.NewError500(
+				XERR_PKGCTX,
+				xerrors.XERR_RESOURCE_CORRUPTED,
+				err,
+				"",
+				"",
+			).WithArgs(
+				fileName,
+				"failed to stream linear script payload stream bytes",
+			)
 		}
 
 		scriptSQL := string(scriptBytes)
@@ -215,9 +304,45 @@ func (o *DBConfig) RunMigrations() error {
 			continue
 		}
 
-		_, err = o.DB.ExecContext(context.Background(), scriptSQL)
+		tx, err := o.DB.BeginTx(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("failed to execute migration file [%s]: %w", fileName, err)
+			return xerrors.NewError500(
+				XERR_PKGCTX,
+				XERR_MIGRATION_EXECUTION_FAILED,
+				err,
+				"",
+				"",
+			).WithArgs(
+				fileName,
+				"failed to begin database transaction block",
+			)
+		}
+
+		if _, err = tx.ExecContext(ctx, scriptSQL); err != nil {
+			tx.Rollback()
+			return xerrors.NewError500(
+				XERR_PKGCTX,
+				XERR_MIGRATION_EXECUTION_FAILED,
+				err,
+				"",
+				"",
+			).WithArgs(
+				fileName,
+				"failed transaction command context lifecycle validation execution block",
+			)
+		}
+
+		if err = tx.Commit(); err != nil {
+			return xerrors.NewError500(
+				XERR_PKGCTX,
+				XERR_MIGRATION_EXECUTION_FAILED,
+				err,
+				"",
+				"",
+			).WithArgs(
+				fileName,
+				"failed to commit finalized transaction statements",
+			)
 		}
 	}
 

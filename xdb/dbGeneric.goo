@@ -117,22 +117,22 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 	switch v := currentPK.(type) {
 	case int64:
 		if v > 0 {
-			logRepoError(ctx, r.db, XERR_REPO_INSERT_HAS_NUMERICAL_PK, nil, "", nil)
-			return XERR_REPO_INSERT_HAS_NUMERICAL_PK
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_WITH_UNEXPECTED_NUMERIC_PK, nil, "", nil)
+			return XERR_REPO_INSERT_WITH_UNEXPECTED_NUMERIC_PK
 		}
 	case string:
 		if !entity.IsNaturalPK() && strings.TrimSpace(v) != "" {
-			logRepoError(ctx, r.db, XERR_REPO_INSERT_HAS_STRING_PK, nil, "", nil)
-			return XERR_REPO_INSERT_HAS_STRING_PK
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_WITH_UNEXPECTED_STRING_PK, nil, "", nil)
+			return XERR_REPO_INSERT_WITH_UNEXPECTED_STRING_PK
 		}
 		if entity.IsNaturalPK() && strings.TrimSpace(v) == "" {
-			logRepoError(ctx, r.db, XERR_REPO_INSERT_NATURAL_PK_EMPTY, nil, "", nil)
-			return XERR_REPO_INSERT_NATURAL_PK_EMPTY
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_WITH_UNEXPECTED_EMPTY_PK, nil, "", nil)
+			return XERR_REPO_INSERT_WITH_UNEXPECTED_EMPTY_PK
 		}
 	case nil:
 		if entity.IsNaturalPK() {
-			logRepoError(ctx, r.db, XERR_REPO_INSERT_NATURAL_PK_NIL, nil, "", nil)
-			return XERR_REPO_INSERT_NATURAL_PK_NIL
+			logRepoError(ctx, r.db, XERR_REPO_INSERT_WITH_UNEXPECTED_NIL_PK, nil, "", nil)
+			return XERR_REPO_INSERT_WITH_UNEXPECTED_NIL_PK
 		}
 	}
 
@@ -165,8 +165,8 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 	executor := r.GetSQLExecutor()
 	result, err := executor.ExecContext(ctx, query, values...)
 	if err != nil {
-		logRepoError(ctx, r.db, XERR_REPO_INSERT_EXEC_FAILED, err, query, values)
-		return XERR_REPO_INSERT_EXEC_FAILED
+		logRepoError(ctx, r.db, XERR_REPO_INSERT_EXECUTION_FAILED, err, query, values)
+		return XERR_REPO_INSERT_EXECUTION_FAILED
 	}
 
 	if entity.TablePK() == "id" {
@@ -184,6 +184,8 @@ func (r *DBGeneric[T, PT]) Insert(ctx context.Context, entity PT) xerrors.ErrorC
 			id, err := result.LastInsertId()
 			if id > 0 && err == nil {
 				entity.BindPK(id)
+			} else {
+				logRepoError(ctx, r.db, XERR_REPO_INSERT_FETCH_ID_FAILED, err, query, values)
 			}
 		}
 	}
