@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"go/format"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -26,6 +29,9 @@ type ErrorInput struct {
 func HandleAddErrorCode(args []string) {
 	fs := flag.NewFlagSet("error-code-add", flag.ExitOnError)
 
+	// NOVA FLAG: Caminho alvo do projeto
+	flagPath := fs.String("path", ".", "The target package root directory where 01_xerrors.go lives")
+
 	// Inline configuration flags
 	flagFamily := fs.Int("family", 0, "Family ID (e.g., 1, 2). Use 0 to interactively select or create one.")
 	flagFamilyTitle := fs.String("family-title", "", "Title for the new family (required only if creating a new family inline)")
@@ -36,7 +42,7 @@ func HandleAddErrorCode(args []string) {
 
 	_ = fs.Parse(args)
 
-	targetFile := "01_xerrors.go"
+	targetFile := filepath.Join(*flagPath, "01_xerrors.go")
 	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
 		fmt.Printf("[ERR] Target file '%s' not found. Ensure you are running this command from the package root.\n", targetFile)
 		os.Exit(1)
@@ -48,7 +54,14 @@ func HandleAddErrorCode(args []string) {
 		fmt.Printf("[ERR] Failed to read '%s': %v\n", targetFile, err)
 		os.Exit(1)
 	}
-	fileContent := string(contentBytes)
+
+	formattedBytes, err := format.Source(contentBytes)
+	if err != nil {
+		// Se o usuário quebrou a sintaxe do Go manualmente a ponto do gofmt falhar, avisamos ele
+		fmt.Printf("[ERR] Target file '%s' has syntax errors and cannot be parsed: %v\n", targetFile, err)
+		os.Exit(1)
+	}
+	fileContent := string(formattedBytes)
 
 	families, maxCodePerFamily, maxFamilyID := parseXerrorsFile(fileContent)
 
@@ -59,6 +72,7 @@ func HandleAddErrorCode(args []string) {
 	// Resolve Family Choice
 	if *flagFamily > 0 {
 		input.FamilyID = *flagFamily
+		// Bloqueia se o cara tentar chutar um número inline maior do que a sequência real permite
 		if input.FamilyID > maxFamilyID+1 {
 			fmt.Printf("[ERR] Invalid family ID %d. Next sequential available family is %d.\n", input.FamilyID, maxFamilyID+1)
 			os.Exit(1)
@@ -71,10 +85,15 @@ func HandleAddErrorCode(args []string) {
 				os.Exit(1)
 			}
 		} else {
+			// Garante que a família realmente existe no arquivo se ele passou um número menor
+			if _, exists := families[input.FamilyID]; !exists {
+				fmt.Printf("[ERR] Family ID %d does not exist inside the registry file.\n", input.FamilyID)
+				os.Exit(1)
+			}
 			input.FamilyName = families[input.FamilyID]
 		}
 	} else {
-		// Run Interactive Prompt for Family Selection
+		// Run Interactive Prompt for Family Selection (Trata o 0 e abre o Wizard)
 		runFamilyWizard(reader, families, maxFamilyID, input)
 	}
 
@@ -203,24 +222,38 @@ func parseXerrorsFile(content string) (families map[int]string, maxCode map[int]
 
 func runFamilyWizard(reader *bufio.Reader, families map[int]string, maxFamilyID int, input *ErrorInput) {
 	fmt.Println("\nAvailable Structural Error Families:")
-	for id, title := range families {
-		fmt.Printf("  [%d] %s\n", id, title)
-	}
-	nextID := maxFamilyID + 1
-	fmt.Printf("  [%d] Create a new sequential semantic family\n", nextID)
 
-	fmt.Printf("Select Family Destination Index [%d-%d]: ", 1, nextID)
+	// FIXO NO TOPO: Opção 0 para criar uma nova família semanticamente
+	fmt.Println("  [0] Create a new sequential semantic family")
+
+	// 1. Extrair todas as chaves existentes do mapa para ordená-las
+	var keys []int
+	for id := range families {
+		keys = append(keys, id)
+	}
+	sort.Ints(keys) // Ordena os IDs numericamente (1, 2, 3...)
+
+	// 2. Apresentar as famílias na ordem numérica correta
+	for _, id := range keys {
+		fmt.Printf("  [%d] %s\n", id, families[id])
+	}
+
+	nextID := maxFamilyID + 1
+	fmt.Printf("\nSelect Family Destination Index [0 or 1-%d]: ", maxFamilyID)
 	choiceStr, _ := reader.ReadString('\n')
 	choiceStr = strings.TrimSpace(choiceStr)
 	choice, err := strconv.Atoi(choiceStr)
 
-	if err != nil || choice < 1 || choice > nextID {
+	// Validação: aceita 0 (nova família) ou qualquer ID que já exista no mapa
+	_, exists := families[choice]
+	if err != nil || (choice != 0 && !exists) {
 		fmt.Println("[ERR] Invalid structural index selection.")
 		os.Exit(1)
 	}
 
-	input.FamilyID = choice
-	if choice == nextID {
+	// 3. Define os parâmetros com base na escolha
+	if choice == 0 {
+		input.FamilyID = nextID
 		input.IsNewFamily = true
 		fmt.Print("Enter Corporate Title for the new Error Family: ")
 		title, _ := reader.ReadString('\n')
@@ -230,12 +263,12 @@ func runFamilyWizard(reader *bufio.Reader, families map[int]string, maxFamilyID 
 			os.Exit(1)
 		}
 	} else {
+		input.FamilyID = choice
 		input.FamilyName = families[choice]
 	}
 }
 
 func injectNewErrorIntoString(content string, input *ErrorInput) string {
-	// 1. Generate Injection Content blocks
 	var constBlock strings.Builder
 	var regBlock strings.Builder
 
@@ -245,60 +278,125 @@ func injectNewErrorIntoString(content string, input *ErrorInput) string {
 	}
 	expectTokens += ", [error]"
 
+	// 1. Montagem dos blocos com tratamento estrito de quebras de linha
 	if input.IsNewFamily {
+		// Nova família cria os cabeçalhos decorativos e deixa uma quebra de linha após o código
 		constBlock.WriteString("\n\t// ============================================================================\n")
 		constBlock.WriteString(fmt.Sprintf("\t// === FAMILY: %d | TITLE: %s\n", input.FamilyID, input.FamilyName))
-		constBlock.WriteString("\t// ============================================================================\n")
+		constBlock.WriteString("\t// ============================================================================\n\n")
+		constBlock.WriteString(fmt.Sprintf("\t// %s belongs to Family %d.\n", input.Constant, input.FamilyID))
+		constBlock.WriteString(fmt.Sprintf("\t// %s\n", input.Technical))
+		constBlock.WriteString(fmt.Sprintf("\t// Format expects: %s\n", expectTokens))
+		constBlock.WriteString(fmt.Sprintf("\t%s xerrors.ErrorCode = \"%s\"\n\n", input.Constant, input.Code)) // \n\n no fim para dar o respiro antes da âncora
 
 		regBlock.WriteString("\n\t// ============================================================================\n")
 		regBlock.WriteString(fmt.Sprintf("\t// === FAMILY: %d\n", input.FamilyID))
-		regBlock.WriteString("\t// ============================================================================\n")
-	}
-
-	constBlock.WriteString(fmt.Sprintf("\n  // %s belongs to Family %d.\n", input.Constant, input.FamilyID))
-	constBlock.WriteString(fmt.Sprintf("  // %s\n", input.Technical))
-	constBlock.WriteString(fmt.Sprintf("  // Format expects: %s\n", expectTokens))
-	constBlock.WriteString(fmt.Sprintf("  %s xerrors.ErrorCode = \"%s\"\n", input.Constant, input.Code))
-
-	regBlock.WriteString(fmt.Sprintf("\n  %s: {\n", input.Constant))
-	regBlock.WriteString(fmt.Sprintf("    Message:   \"%s\",\n", input.Message))
-	regBlock.WriteString("    ExtraTags: []string{")
-	for i, f := range input.Fields {
-		if i > 0 {
-			regBlock.WriteString(", ")
+		regBlock.WriteString("\t// ============================================================================\n\n")
+		regBlock.WriteString(fmt.Sprintf("\t%s: xerrors.NewMetaMessage(\n", input.Constant))
+		regBlock.WriteString(fmt.Sprintf("\t\t\"%s\",\n", input.Message))
+		regBlock.WriteString("\t\t\"\",\n")
+		regBlock.WriteString("\t\t[]string{")
+		for i, f := range input.Fields {
+			if i > 0 {
+				regBlock.WriteString(", ")
+			}
+			regBlock.WriteString(fmt.Sprintf("\"%s\"", f))
 		}
-		regBlock.WriteString(fmt.Sprintf("\"%s\"", f))
-	}
-	regBlock.WriteString("},\n  },\n")
-
-	// 2. Perform target slicing using visual layout anchors
-	if input.IsNewFamily {
-		// New families append at the absolute end of the target placeholder boundary blocks
-		content = strings.Replace(content, "  // X_ANCHOR_CONSTANTS_END", constBlock.String()+"  // X_ANCHOR_CONSTANTS_END", 1)
-		content = strings.Replace(content, "  // X_ANCHOR_REGISTRY_END", regBlock.String()+"  // X_ANCHOR_REGISTRY_END", 1)
+		regBlock.WriteString("},\n\t),\n\n") // \n\n no fim para dar o respiro antes da âncora
 	} else {
-		// Existing families look for the next sequential family token boundary or default to boundary tail anchors
-		nextFamilyMarker := fmt.Sprintf("=== FAMILY: %d", input.FamilyID+1)
+		// Se a família já existe, gera APENAS o bloco do erro puramente.
+		// Sem nenhuma quebra de linha extra no início ou no fim, para forçar o gofmt a colá-los.
+		constBlock.WriteString(fmt.Sprintf("\t// %s belongs to Family %d.\n", input.Constant, input.FamilyID))
+		constBlock.WriteString(fmt.Sprintf("\t// %s\n", input.Technical))
+		constBlock.WriteString(fmt.Sprintf("\t// Format expects: %s\n", expectTokens))
+		constBlock.WriteString(fmt.Sprintf("\t%s xerrors.ErrorCode = \"%s\"\n", input.Constant, input.Code))
 
-		content = injectBeforeOccurrenceOrAnchor(content, nextFamilyMarker, "  // X_ANCHOR_CONSTANTS_END", constBlock.String())
-		content = injectBeforeOccurrenceOrAnchor(content, nextFamilyMarker, "  // X_ANCHOR_REGISTRY_END", regBlock.String())
-	}
-
-	return content
-}
-
-func injectBeforeOccurrenceOrAnchor(fullText, searchToken, fallbackAnchor, blockToInject string) string {
-	idx := strings.Index(fullText, searchToken)
-	if idx != -1 {
-		// Found next family, rewind slightly to position inside comments context beautifully
-		before := fullText[:idx]
-		// Backtrack to find the start of the divider comment block
-		lastDivider := strings.LastIndex(before, "// ============================================================================")
-		if lastDivider != -1 {
-			return fullText[:lastDivider] + blockToInject + fullText[lastDivider:]
+		regBlock.WriteString(fmt.Sprintf("\t%s: xerrors.NewMetaMessage(\n", input.Constant))
+		regBlock.WriteString(fmt.Sprintf("\t\t\"%s\",\n", input.Message))
+		regBlock.WriteString("\t\t\"\",\n")
+		regBlock.WriteString("\t\t[]string{")
+		for i, f := range input.Fields {
+			if i > 0 {
+				regBlock.WriteString(", ")
+			}
+			regBlock.WriteString(fmt.Sprintf("\"%s\"", f))
 		}
-		return fullText[:idx] + blockToInject + fullText[idx:]
+		regBlock.WriteString("},\n\t),\n")
 	}
-	// Fallback to section tail anchor
-	return strings.Replace(fullText, fallbackAnchor, blockToInject+fallbackAnchor, 1)
+
+	// 2. Fatiamento por Âncoras Dinâmicas
+	// Em vez de buscar a próxima família, nós buscamos a âncora de fechamento da família ATUAL.
+	// Se for uma família existente (ex: Family 1), procuramos o divisor da Family 2 e injetamos imediatamente antes dele.
+	var targetConstAnchor string
+	var targetRegAnchor string
+
+	if input.IsNewFamily {
+		targetConstAnchor = "\t// X_ANCHOR_CONSTANTS_END"
+		targetRegAnchor = "\t// X_ANCHOR_REGISTRY_END"
+	} else {
+		// Ex: Se estamos adicionando na Family 1, o marcador que delimita o fim dela é o cabeçalho da Family 2
+		targetConstAnchor = fmt.Sprintf("=== FAMILY: %d", input.FamilyID+1)
+		targetRegAnchor = fmt.Sprintf("=== FAMILY: %d", input.FamilyID+1)
+	}
+
+	// Isola as seções do arquivo para evitar colisões
+	registryAnchorIdx := strings.Index(content, "var xerrorLocalRegistry")
+	if registryAnchorIdx == -1 {
+		fmt.Println("[ERR] Structural anomaly: 'var xerrorLocalRegistry' placeholder missing.")
+		os.Exit(1)
+	}
+	constantsPart := content[:registryAnchorIdx]
+	registryPart := content[registryAnchorIdx:]
+
+	// 3. Executa a Injeção Limpa baseada nos alvos matemáticos
+	idxConst := strings.Index(constantsPart, targetConstAnchor)
+	if idxConst != -1 {
+		if input.IsNewFamily {
+			constantsPart = strings.Replace(constantsPart, targetConstAnchor, constBlock.String()+targetConstAnchor, 1)
+		} else {
+			// Sobe até o início da linha do marcador da próxima família para injetar ali, colando no erro anterior
+			beforeMarker := constantsPart[:idxConst]
+			lastLB := strings.LastIndex(beforeMarker, "\n")
+			// Se o marcador tem o divisor de comentários em cima, sobe mais uma linha
+			potentialStart := constantsPart[:lastLB]
+			lastLB2 := strings.LastIndex(potentialStart, "\n")
+			if strings.Contains(potentialStart[lastLB2:], "=======") {
+				constantsPart = constantsPart[:lastLB2] + constBlock.String() + constantsPart[lastLB2:]
+			} else {
+				constantsPart = constantsPart[:lastLB+1] + constBlock.String() + constantsPart[lastLB+1:]
+			}
+		}
+	} else {
+		// Fallback de segurança para o fim da seção se não achar a próxima família
+		constantsPart = strings.Replace(constantsPart, "\n\t// X_ANCHOR_CONSTANTS_END", constBlock.String()+"\n\t// X_ANCHOR_CONSTANTS_END", 1)
+	}
+
+	idxReg := strings.Index(registryPart, targetRegAnchor)
+	if idxReg != -1 {
+		if input.IsNewFamily {
+			registryPart = strings.Replace(registryPart, targetRegAnchor, regBlock.String()+targetRegAnchor, 1)
+		} else {
+			beforeMarker := registryPart[:idxReg]
+			lastLB := strings.LastIndex(beforeMarker, "\n")
+			potentialStart := registryPart[:lastLB]
+			lastLB2 := strings.LastIndex(potentialStart, "\n")
+			if strings.Contains(potentialStart[lastLB2:], "=======") {
+				registryPart = registryPart[:lastLB2] + regBlock.String() + registryPart[lastLB2:]
+			} else {
+				registryPart = registryPart[:lastLB+1] + regBlock.String() + registryPart[lastLB+1:]
+			}
+		}
+	} else {
+		// Fallback de segurança para o fim da seção se não achar a próxima família
+		registryPart = strings.Replace(registryPart, "\n\t// X_ANCHOR_REGISTRY_END", regBlock.String()+"\n\t// X_ANCHOR_REGISTRY_END", 1)
+	}
+
+	// 4. Formatação Final Unificada
+	finalOutput := constantsPart + registryPart
+	beautifulBytes, err := format.Source([]byte(finalOutput))
+	if err != nil {
+		return finalOutput
+	}
+
+	return string(beautifulBytes)
 }

@@ -1,0 +1,131 @@
+package cmd
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"go/format"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// HandleRemoveErrorSubctx manages the entrypoint execution flow for 'error subctx remove'.
+func HandleRemoveErrorSubctx(args []string) {
+	fs := flag.NewFlagSet("error-subctx-remove", flag.ExitOnError)
+	flagPath := fs.String("path", ".", "The target package root directory where 01_xerrors.go lives")
+
+	_ = fs.Parse(args)
+
+	targetFile := filepath.Join(*flagPath, "01_xerrors.go")
+	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+		fmt.Printf("[ERR] Target file '%s' not found. Ensure you are running this command from the package root.\n", targetFile)
+		os.Exit(1)
+	}
+
+	// 1. Ler e normalizar o arquivo com go/format
+	contentBytes, err := os.ReadFile(targetFile)
+	if err != nil {
+		fmt.Printf("[ERR] Failed to read '%s': %v\n", targetFile, err)
+		os.Exit(1)
+	}
+
+	formattedBytes, err := format.Source(contentBytes)
+	if err != nil {
+		fmt.Printf("[ERR] Target file '%s' has syntax errors and cannot be parsed: %v\n", targetFile, err)
+		os.Exit(1)
+	}
+	fileContent := string(formattedBytes)
+
+	// 2. Extrair apenas os subcontextos (ignorando o Namespace principal)
+	constants, values := parseOnlySubContexts(fileContent)
+
+	if len(constants) == 0 {
+		fmt.Println("No removable error sub-contexts found in this registry file.")
+		return
+	}
+
+	// 3. Apresentar o Wizard interativo seguindo sua lógica do Error Code
+	fmt.Println("\nAvailable Error Sub-Contexts:")
+	fmt.Println("  [0] Abort operation (Do not delete anything)")
+
+	for i := 0; i < len(constants); i++ {
+		fmt.Printf("  [%d] %s (%s)\n", i+1, constants[i], values[i])
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("\nSelect Sub-Context Index to REMOVE [0 or 1-%d]: ", len(constants))
+	choiceStr, _ := reader.ReadString('\n')
+	choiceStr = strings.TrimSpace(choiceStr)
+	choice, err := strconv.Atoi(choiceStr)
+
+	if err != nil || choice < 0 || choice > len(constants) {
+		fmt.Println("[ERR] Invalid structural index selection.")
+		os.Exit(1)
+	}
+
+	// Se escolheu 0, aborta sem erro
+	if choice == 0 {
+		fmt.Println("[OKK] Operation aborted by user.")
+		return
+	}
+
+	// Recupera o alvo escolhido (ajustando o índice baseado em 1)
+	targetConstant := constants[choice-1]
+
+	// 4. Remover o bloco de código do arquivo string
+	updatedContent := removeSubctxFromString(fileContent, targetConstant)
+
+	// 5. Salvar modificações
+	err = os.WriteFile(targetFile, []byte(updatedContent), 0644)
+	if err != nil {
+		fmt.Printf("[ERR] Failed writing modifications down to '%s': %v\n", targetFile, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OKK] Successfully removed sub-context '%s' from registry.\n", targetConstant)
+}
+
+// parseOnlySubContexts extrai apenas as constantes secundárias geradas, ignorando o Namespace base.
+func parseOnlySubContexts(content string) (constants []string, values []string) {
+	reBlock := regexp.MustCompile(`(?s)X_ANCHOR_PKGCTX_START(.*?)X_ANCHOR_PKGCTX_END`)
+	blockMatch := reBlock.FindStringSubmatch(content)
+	if len(blockMatch) < 2 {
+		return
+	}
+	subBlock := blockMatch[1]
+
+	reLine := regexp.MustCompile(`(XERR_[A-Z0-9_]*)\s+xerrors\.ErrorCode\s*=\s*"([^"]+)"`)
+	matches := reLine.FindAllStringSubmatch(subBlock, -1)
+
+	// Começamos do índice 1 para IGNORAR a primeira constante encontrada,
+	// que é o Namespace base (XERR_PKGCTX) e não deve ser removido por aqui.
+	for i := 1; i < len(matches); i++ {
+		match := matches[i]
+		if len(match) == 3 {
+			constants = append(constants, match[1])
+			values = append(values, match[2])
+		}
+	}
+	return
+}
+
+// removeSubctxFromString localiza o comentário descritivo e a constante para removê-los limpamente.
+func removeSubctxFromString(content string, constant string) string {
+	// Este regex agora é agnóstico à frase: ele encontra qualquer comentário [ \t]*\/\/
+	// que comece com o nome da constante e remove a linha inteira, seguido da declaração da constante.
+	pattern := fmt.Sprintf(`(?s)([ \t]*\/\/ %s[^\n]*\n)?([ \t]*%s\s+xerrors\.ErrorCode\s*=\s*"[^"]+"\n*)`, constant, constant)
+	re := regexp.MustCompile(pattern)
+
+	finalOutput := re.ReplaceAllString(content, "")
+
+	// Passa novamente pelo format.Source para reajustar as quebras de linhas órfãs
+	beautifulBytes, err := format.Source([]byte(finalOutput))
+	if err != nil {
+		return finalOutput
+	}
+
+	return string(beautifulBytes)
+}

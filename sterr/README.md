@@ -45,6 +45,7 @@ type CliError interface {
     error
 
     // Mutation & Building (Returns new instances)
+    SetMessage(format string, args ...any) CliError
     SetDevMessage(format string, args ...any) CliError
     SetUserMessage(format string, args ...any) CliError
     AppendDevMessage(format string, args ...any) CliError

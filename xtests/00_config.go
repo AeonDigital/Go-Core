@@ -1,6 +1,4 @@
-package cmd
-
-import "embed"
+package xtests
 
 /*
 	ARCHITECTURE & SCOPE LIMITATION:
@@ -13,5 +11,3 @@ import "embed"
 */
 
 // Insert configuration structures, operational constants, or atomic state flags below.
-
-var TemplateFS embed.FS

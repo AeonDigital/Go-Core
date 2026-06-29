@@ -1,0 +1,216 @@
+package cmd
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"go/format"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"text/tabwriter"
+)
+
+// ListErrorMetadata organiza temporariamente os metadados de cada erro para exibição
+type ListErrorMetadata struct {
+	Constant string
+	Code     string
+	FamilyID string
+	Message  string
+	Fields   string
+}
+
+// HandleListErrorCode manages the execution flow for 'error code list'
+func HandleListErrorCode(args []string) {
+	fs := flag.NewFlagSet("error-code-list", flag.ExitOnError)
+	flagPath := fs.String("path", ".", "The target package root directory where 01_xerrors.go lives")
+	flagFamily := fs.String("family", "", "Filter errors by Family ID (e.g., 1, 2). Optional.")
+
+	_ = fs.Parse(args)
+
+	targetFile := filepath.Join(*flagPath, "01_xerrors.go")
+	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+		fmt.Printf("[ERR] Target file '%s' not found. Ensure you are running this command from the package root.\n", targetFile)
+		os.Exit(1)
+	}
+
+	// 1. Ler e normalizar o arquivo com go/format
+	contentBytes, err := os.ReadFile(targetFile)
+	if err != nil {
+		fmt.Printf("[ERR] Failed to read '%s': %v\n", targetFile, err)
+		os.Exit(1)
+	}
+
+	formattedBytes, err := format.Source(contentBytes)
+	if err != nil {
+		fmt.Printf("[ERR] Target file '%s' has syntax errors and cannot be parsed: %v\n", targetFile, err)
+		os.Exit(1)
+	}
+	fileContent := string(formattedBytes)
+
+	// 2. Processar metadados do arquivo
+	errorsMap := parseAllErrorCodes(fileContent)
+
+	if len(errorsMap) == 0 {
+		fmt.Println("No error codes found in this registry file.")
+		return
+	}
+
+	// 3. Renderizar com o tabwriter nativo
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "CONSTANT\tCODE\tFIELDS\tMESSAGE")
+	fmt.Fprintln(w, "--------\t----\t------\t-------")
+
+	hasPrintedAny := false
+	for _, meta := range errorsMap {
+		// Aplica o filtro da flag --family se o usuário tiver informado uma
+		if *flagFamily != "" && meta.FamilyID != *flagFamily {
+			continue
+		}
+		hasPrintedAny = true
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", meta.Constant, meta.Code, meta.Fields, meta.Message)
+	}
+
+	if !hasPrintedAny {
+		fmt.Printf("No error codes found matching Family ID '%s'.\n", *flagFamily)
+		return
+	}
+
+	w.Flush()
+}
+
+// parseAllErrorCodes varre o arquivo e correlaciona as declarações de constantes com suas mensagens no mapa
+func parseAllErrorCodes(content string) []ListErrorMetadata {
+	var orderedErrors []ListErrorMetadata
+	metaIndex := make(map[string]*ListErrorMetadata)
+
+	// 1. Captura as declarações das constantes de erro (ex: INVALID_COMMAND_NAME xerrors.ErrorCode = "E1002")
+	reConst := regexp.MustCompile(`([A-Z0-9_]+)\s+xerrors\.ErrorCode\s*=\s*"E(\d)(\d+)"`)
+	constMatches := reConst.FindAllStringSubmatch(content, -1)
+
+	for _, match := range constMatches {
+		if len(match) == 4 {
+			constName := match[1]  // Grupo 1: Nome da Constante
+			familyID := match[2]   // Grupo 2: ID da Família (o dígito logo após o 'E')
+			restOfCode := match[3] // Grupo 3: O restante do código numérico
+
+			meta := &ListErrorMetadata{
+				Constant: constName,
+				FamilyID: familyID,
+				Code:     "E" + familyID + restOfCode, // Reconstrói o código completo (ex: E1002)
+				Fields:   "-",
+				Message:  "-",
+			}
+			orderedErrors = append(orderedErrors, *meta)
+
+			// Agora mapeamos a chave usando a string correta do nome da constante
+			metaIndex[constName] = &orderedErrors[len(orderedErrors)-1]
+		}
+	}
+
+	// 2. Varre o arquivo para ler o bloco do xerrorLocalRegistry de forma agnóstica a quebras de linha
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	isInRegistry := false
+	var currentMeta *ListErrorMetadata
+	var collectingFields bool
+	var fieldsBuffer strings.Builder
+
+	// Regex para identificar a chave do mapa (ex: XERR_UNKNOWN:)
+	reMapKey := regexp.MustCompile(`^\s*([A-Z0-9_]+)\s*:`)
+	// Regex para capturar qualquer string entre aspas (usado para pegar a mensagem de erro)
+	reQuotedString := regexp.MustCompile(`"([^"]*)"`)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if strings.Contains(line, "var xerrorLocalRegistry") {
+			isInRegistry = true
+			continue
+		}
+
+		if isInRegistry {
+			if strings.HasPrefix(line, "}") {
+				break
+			}
+
+			// Se achar uma nova chave de mapa, muda o ponteiro do erro atual e reseta buffers
+			if keyMatches := reMapKey.FindStringSubmatch(line); len(keyMatches) > 0 {
+				constName := keyMatches[1]
+				currentMeta = metaIndex[constName]
+				collectingFields = false
+				fieldsBuffer.Reset()
+				continue
+			}
+
+			// Se estamos posicionados em um erro válido no mapeamento
+			if currentMeta != nil {
+
+				// Captura a mensagem humana: É a primeira string entre aspas encontrada dentro do bloco do erro
+				if currentMeta.Message == "-" {
+					if msgMatches := reQuotedString.FindStringSubmatch(line); len(msgMatches) > 0 {
+						currentMeta.Message = strings.TrimSpace(msgMatches[1])
+					}
+				}
+
+				// Lógica de captura de Fields resiliente a múltiplas linhas
+				if strings.Contains(line, "[]string") {
+					collectingFields = true
+					// Se abrir e fechar na mesma linha (ex: []string{"CTX", "MSG"}), processa direto
+					if strings.Contains(line, "}") {
+						idxStart := strings.Index(line, "{")
+						idxEnd := strings.Index(line, "}")
+						if idxStart != -1 && idxEnd != -1 && idxEnd > idxStart {
+							processFieldsLine(currentMeta, line[idxStart+1:idxEnd])
+						}
+						collectingFields = false
+						currentMeta = nil // Bloco finalizado para este erro
+					}
+					continue
+				}
+
+				// Se está no meio da captura de linhas do array []string
+				if collectingFields {
+					if strings.Contains(line, "}") {
+						// Chegou ao fim do array, processa tudo o que acumulou no buffer
+						idxEnd := strings.Index(line, "}")
+						fieldsBuffer.WriteString(line[:idxEnd])
+						processFieldsLine(currentMeta, fieldsBuffer.String())
+
+						collectingFields = false
+						currentMeta = nil // Bloco finalizado para este erro
+					} else {
+						// Acumula o conteúdo da linha (removendo quebras) no buffer temporário
+						fieldsBuffer.WriteString(line)
+					}
+				}
+			}
+		}
+	}
+
+	return orderedErrors
+}
+
+// processFieldsLine isola, limpa e filtra as tags obrigatórias da arquitetura
+func processFieldsLine(meta *ListErrorMetadata, rawContent string) {
+	rawContent = strings.ReplaceAll(rawContent, `"`, "")
+	rawContent = strings.ReplaceAll(rawContent, " ", "")
+	rawContent = strings.ReplaceAll(rawContent, "\t", "")
+
+	if rawContent == "" {
+		return
+	}
+
+	parts := strings.Split(rawContent, ",")
+	var filteredParts []string
+	for _, p := range parts {
+		pUpper := strings.ToUpper(strings.TrimSpace(p))
+		if pUpper != "CTX" && pUpper != "MSG" && pUpper != "" {
+			filteredParts = append(filteredParts, pUpper)
+		}
+	}
+
+	if len(filteredParts) > 0 {
+		meta.Fields = strings.Join(filteredParts, ", ")
+	}
+}

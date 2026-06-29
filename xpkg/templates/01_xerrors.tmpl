@@ -24,7 +24,7 @@ const (
   //
   // X_ANCHOR_PKGCTX_START
 
-  // XERR_PKGCTX defines the unique tracking string boundary separating this package from cross-domain collisions.
+  // XERR_PKGCTX defines the error code namespace for this package.
   XERR_PKGCTX xerrors.ErrorCode = "ERR_{{stringsToUpper .PkgName}}"
 
   // X_ANCHOR_PKGCTX_END
@@ -35,9 +35,9 @@ const (
   //
   // X_ANCHOR_CONSTANTS_START
 
-	// ============================================================================
-	// === FAMILY: 1 | TITLE: GENERAL AND SYSTEM FALLBACKS
-	// ============================================================================
+  // ============================================================================
+  // === FAMILY: 1 | TITLE: GENERAL AND SYSTEM FALLBACKS
+  // ============================================================================
 
   // XERR_UNKNOWN serves as the fallback categorization for untracked exceptions within this domain.
   // Format expects: CTX, MSG, [error]
@@ -54,13 +54,15 @@ var xerrorLocalRegistry = map[xerrors.ErrorCode]xerrors.MetaMessage{
   //
   // X_ANCHOR_REGISTRY_START
 
-	// ============================================================================
-	// === FAMILY: 1
-	// ============================================================================
-  XERR_UNKNOWN: {
-    Message:   "unexpected internal {{.PkgName}} error encountered",
-    ExtraTags: []string{},
-  },
+  // ============================================================================
+  // === FAMILY: 1
+  // ============================================================================
+
+  XERR_UNKNOWN: xerrors.NewMetaMessage(
+    "unexpected internal xtests error encountered",
+    "",
+    []string{},
+  ),
 
   // X_ANCHOR_REGISTRY_END
   //

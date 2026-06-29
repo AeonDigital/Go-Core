@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"go/format"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -21,10 +23,11 @@ type SubctxInput struct {
 func HandleAddErrorSubctx(args []string) {
 	fs := flag.NewFlagSet("error-subctx-add", flag.ExitOnError)
 	flagName := fs.String("name", "", "The name of the new sub-context (e.g., validation, auth)")
+	flagPath := fs.String("path", ".", "The target package root directory where 01_xerrors.go lives")
 
 	_ = fs.Parse(args)
 
-	targetFile := "01_xerrors.go"
+	targetFile := filepath.Join(*flagPath, "01_xerrors.go")
 	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
 		fmt.Printf("[ERR] Target file '%s' not found. Ensure you are running this command from the package root.\n", targetFile)
 		os.Exit(1)
@@ -36,7 +39,13 @@ func HandleAddErrorSubctx(args []string) {
 		fmt.Printf("[ERR] Failed to read '%s': %v\n", targetFile, err)
 		os.Exit(1)
 	}
-	fileContent := string(contentBytes)
+
+	formattedBytes, err := format.Source(contentBytes)
+	if err != nil {
+		fmt.Printf("[ERR] Target file '%s' has syntax errors and cannot be parsed: %v\n", targetFile, err)
+		os.Exit(1)
+	}
+	fileContent := string(formattedBytes)
 
 	// 2. Discover the baseline XERR_PKGCTX configuration
 	baseConstant, baseValue := parseMainContext(fileContent)
@@ -109,12 +118,27 @@ func parseMainContext(content string) (constant string, value string) {
 func injectNewSubctxIntoString(content string, input *SubctxInput) string {
 	var subctxBlock strings.Builder
 
-	subctxBlock.WriteString(fmt.Sprintf("\n  // %s defines a specialized sub-context scope derived from %s.\n", input.NewConstant, input.BaseConstant))
-	subctxBlock.WriteString(fmt.Sprintf("  %s xerrors.ErrorCode = \"%s\"\n", input.NewConstant, input.NewValue))
+	// Usamos tabulações (\t) para alinhar perfeitamente com a saída padrão do gofmt
+	subctxBlock.WriteString(fmt.Sprintf("\t// %s defines the sub-context for %s.\n", input.NewConstant, input.BaseConstant))
+	// Adicionamos um \n extra ao final da declaração da constante para criar a linha em branco antes da âncora
+	subctxBlock.WriteString(fmt.Sprintf("\t%s xerrors.ErrorCode = \"%s\"\n\n", input.NewConstant, input.NewValue))
 
-	// Injects beautifully right before the visual section boundary marker anchor
-	fallbackAnchor := "  // X_ANCHOR_PKGCTX_END"
-	content = strings.Replace(content, fallbackAnchor, subctxBlock.String()+fallbackAnchor, 1)
+	// Como o arquivo passou pelo format.Source, a âncora agora usa um caractere TAB (\t) obrigatoriamente
+	targetAnchor := "\t// X_ANCHOR_PKGCTX_END"
 
-	return content
+	if !strings.Contains(content, targetAnchor) {
+		fmt.Println("[ERR] Critical anchor point '\\t// X_ANCHOR_PKGCTX_END' was not found in the formatted file.")
+		os.Exit(1)
+	}
+
+	// Realiza a substituição empurrando a âncora para baixo
+	finalOutput := strings.Replace(content, targetAnchor, subctxBlock.String()+targetAnchor, 1)
+
+	// Formatação final unificada para reajustar blocos visuais e quebras extras
+	beautifulBytes, err := format.Source([]byte(finalOutput))
+	if err != nil {
+		return finalOutput
+	}
+
+	return string(beautifulBytes)
 }

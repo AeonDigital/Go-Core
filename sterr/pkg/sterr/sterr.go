@@ -38,6 +38,20 @@ func (e *typedCliError) Error() string {
 	return fmt.Sprintf("[FUNC: %s][MSG: %s]", e.function, e.devMsg)
 }
 
+// SetMessage overrides the current technical diagnostic text and the current end-user friendly instruction.
+//
+// Arguments:
+//   - format: Standard print formatting string template base.
+//   - args: Variable slice payloads to inject into placeholders.
+func (e *typedCliError) SetMessage(format string, args ...any) sterrinterfc.CliError {
+	msg := fmt.Sprintf(format, args...)
+	return &typedCliError{
+		function: e.function,
+		devMsg:   msg,
+		userMsg:  msg,
+	}
+}
+
 // SetDevMessage overrides the current technical diagnostic text.
 //
 // Arguments:

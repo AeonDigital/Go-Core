@@ -5,6 +5,9 @@ type CliError interface {
 	// error implements the native Go error interface.
 	error
 
+	// SetMessage overrides the current technical diagnostic text and the current end-user friendly instruction.
+	SetMessage(format string, args ...any) CliError
+
 	// SetDevMessage overrides the current technical diagnostic text.
 	SetDevMessage(format string, args ...any) CliError
 

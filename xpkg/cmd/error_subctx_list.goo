@@ -1,0 +1,88 @@
+package cmd
+
+import (
+	"flag"
+	"fmt"
+	"go/format"
+	"os"
+	"path/filepath"
+	"regexp"
+	"text/tabwriter"
+)
+
+// HandleListErrorSubctx manages the execution flow for 'error subctx list'
+func HandleListErrorSubctx(args []string) {
+	fs := flag.NewFlagSet("error-subctx-list", flag.ExitOnError)
+	flagPath := fs.String("path", ".", "The target package root directory where 01_xerrors.go lives")
+
+	_ = fs.Parse(args)
+
+	targetFile := filepath.Join(*flagPath, "01_xerrors.go")
+	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+		fmt.Printf("[ERR] Target file '%s' not found. Ensure you are running this command from the package root.\n", targetFile)
+		os.Exit(1)
+	}
+
+	// 1. Read existing file
+	contentBytes, err := os.ReadFile(targetFile)
+	if err != nil {
+		fmt.Printf("[ERR] Failed to read '%s': %v\n", targetFile, err)
+		os.Exit(1)
+	}
+
+	// Normaliza o arquivo usando go/format para garantir consistência estrutural
+	formattedBytes, err := format.Source(contentBytes)
+	if err != nil {
+		fmt.Printf("[ERR] Target file '%s' has syntax errors and cannot be parsed: %v\n", targetFile, err)
+		os.Exit(1)
+	}
+	fileContent := string(formattedBytes)
+
+	// 2. Extrai as constantes e valores mapeados no bloco PKGCTX
+	constants, values := parseSubContexts(fileContent)
+
+	if len(constants) == 0 {
+		fmt.Println("No error sub-contexts or namespaces found in this registry file.")
+		return
+	}
+
+	// 3. Inicializa o tabwriter nativo do Go para renderizar a tabela
+	// Parametros: output, minwidth, tabwidth, padding, padchar, flags
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+
+	// Cabeçalho da Tabela (use \t para separar as colunas e \n para quebrar a linha)
+	fmt.Fprintln(w, "CONSTANT\tVALUE")
+	fmt.Fprintln(w, "\t")
+
+	// Alimenta a tabela com os dados encontrados
+	for i := 0; i < len(constants); i++ {
+		fmt.Fprintf(w, "%s\t%s\n", constants[i], values[i])
+	}
+
+	// O Flush é obrigatório para calcular o tamanho das colunas e renderizar tudo alinhado
+	w.Flush()
+}
+
+// parseSubContexts varre o arquivo procurando por declarações de ErrorCode
+// especificamente na seção delimitada pelas âncoras do PKGCTX.
+func parseSubContexts(content string) (constants []string, values []string) {
+	// Captura apenas o bloco de código que vive entre as duas âncoras de contexto
+	reBlock := regexp.MustCompile(`(?s)X_ANCHOR_PKGCTX_START(.*?)X_ANCHOR_PKGCTX_END`)
+	blockMatch := reBlock.FindStringSubmatch(content)
+	if len(blockMatch) < 2 {
+		return
+	}
+	subBlock := blockMatch[1]
+
+	// Regex interna para extrair a constante e o valor string atribuído
+	reLine := regexp.MustCompile(`(XERR_[A-Z0-9_]*)\s+xerrors\.ErrorCode\s*=\s*"([^"]+)"`)
+	matches := reLine.FindAllStringSubmatch(subBlock, -1)
+
+	for _, match := range matches {
+		if len(match) == 3 {
+			constants = append(constants, match[1])
+			values = append(values, match[2])
+		}
+	}
+	return
+}

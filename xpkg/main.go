@@ -1,23 +1,18 @@
 package main
 
 import (
-	"fmt"
 	"os"
-
-	"github.com/AeonDigital/Go-Core/xpkg/cmd"
 )
 
 func main() {
-	cmd.TemplateFS = TemplateFS
-
 	if len(os.Args) < 2 {
-		cmd.PrintGeneralHelp()
+		//cmd.PrintGeneralHelp()
 		os.Exit(1)
 	}
 
-	resource := os.Args[1]
+	//resource := os.Args[1]
 
-	switch resource {
+	/*switch resource {
 	case "help":
 		cmd.HandleHelp(os.Args[2:])
 
@@ -40,7 +35,7 @@ func main() {
 
 	case "error":
 		if len(os.Args) < 4 {
-			fmt.Println("[ERR] Missing parameters for 'error'. Expected 'error code add' or 'error subctx add'.")
+			fmt.Println("[ERR] Missing parameters for 'error'. Expected 'error code add', 'error code list', 'error subctx add', 'error subctx list' or 'error subctx remove'.")
 			fmt.Println("Run 'xpkg help error' for usage documentation.")
 			os.Exit(1)
 		}
@@ -52,16 +47,22 @@ func main() {
 		case "code":
 			if action == "add" {
 				cmd.HandleAddErrorCode(os.Args[4:])
+			} else if action == "list" {
+				cmd.HandleListErrorCode(os.Args[4:])
 			} else {
-				fmt.Printf("[ERR] Unknown action '%s' for 'error code'. Expected 'add'.\n", action)
+				fmt.Printf("[ERR] Unknown action '%s' for 'error code'. Expected 'add' or 'list'.\n", action)
 				os.Exit(1)
 			}
 
 		case "subctx":
 			if action == "add" {
 				cmd.HandleAddErrorSubctx(os.Args[4:])
+			} else if action == "list" {
+				cmd.HandleListErrorSubctx(os.Args[4:])
+			} else if action == "remove" {
+				cmd.HandleRemoveErrorSubctx(os.Args[4:])
 			} else {
-				fmt.Printf("[ERR] Unknown action '%s' for 'error subctx'. Expected 'add'.\n", action)
+				fmt.Printf("[ERR] Unknown action '%s' for 'error subctx'. Expected 'add', 'list' or 'remove'.\n", action)
 				os.Exit(1)
 			}
 
@@ -74,5 +75,5 @@ func main() {
 		fmt.Printf("[ERR] Unknown resource '%s'.\n\n", resource)
 		cmd.PrintGeneralHelp()
 		os.Exit(1)
-	}
+	}*/
 }

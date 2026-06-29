@@ -62,7 +62,19 @@ func TestErrorImutabilityAndSetters(t *testing.T) {
 	// 1. Create a pristine base error
 	baseErr := sterr.NewWithFunc("pkg::TestFunc")
 
-	// 2. Apply SetDevMessage and verify formatting + isolation
+	// 2. Apply SetMessage and verify formatting + isolation
+	msgErr := baseErr.SetMessage("database failure: %d", 500)
+	if msgErr == baseErr {
+		t.Errorf("expected a new instance pointer, but got the same base pointer")
+	}
+	if msgErr.GetDevMessage() != "database failure: 500" {
+		t.Errorf("expected dev message to be formatted, got '%s'", msgErr.GetDevMessage())
+	}
+	if msgErr.GetUserMessage() != "database failure: 500" {
+		t.Errorf("expected user message to be formatted, got '%s'", msgErr.GetUserMessage())
+	}
+
+	// 3. Apply SetDevMessage and verify formatting + isolation
 	devErr := baseErr.SetDevMessage("database failure: %d", 500)
 	if devErr == baseErr {
 		t.Errorf("expected a new instance pointer, but got the same base pointer")
@@ -74,7 +86,7 @@ func TestErrorImutabilityAndSetters(t *testing.T) {
 		t.Errorf("mutation leaked: base error dev message should remain empty")
 	}
 
-	// 3. Apply SetUserMessage and verify formatting + isolation
+	// 4. Apply SetUserMessage and verify formatting + isolation
 	userErr := devErr.SetUserMessage("tente novamente mais tarde %s", "admin")
 	if userErr == devErr {
 		t.Errorf("expected a new instance pointer from user setter")
